@@ -62,7 +62,7 @@
 | `fs_change` | path, added, removed, in_scope | 文件变更 |
 | `error` | signature, message, count | 归一化后的报错签名 |
 | `evidence` | uri, kind, bytes | 新增 L0 证据的地址（`ev://<machine>/<run>/<name>`） |
-| `claim` | kind, text | agent 自述（如“完成了”），**只是声明，不是证据** |
+| `claim` | kind, text | agent 自述（`done` 一轮结束并声称完成、`error` 一轮异常结束），**只是声明，不是证据**；`done` 让 Run 进入 `VERIFYING` |
 
 ## 指令（Directive）
 
@@ -74,5 +74,6 @@
 | `PAUSE` | 下一个工具边界 | 拒绝后续工具调用；Job 用 SIGSTOP |
 | `ROLLBACK` | 立即 | 恢复 worktree 快照，开新会话并注入回滚说明 |
 | `ABORT` | 立即 | 终止进程，进入 `ABORTED` |
+| `COMPLETE` | 立即 | 验收通过：结束会话，进入 `SUCCEEDED`（只能在 `VERIFYING` 状态下执行） |
 
 ack 状态：`applied`、`rejected_stale`、`rejected_invalid`、`failed`。

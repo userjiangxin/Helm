@@ -20,7 +20,7 @@ daemon/            helmd (Go 1.24, module github.com/helm/helm/daemon)
   internal/hook/       Claude Code PreToolUse ⇄ unix socket ⇄ policy (fail-closed)
   internal/conn/       WebSocket wake + HTTP pull + spool + heartbeat
   internal/supervisor/ run lifecycle, directives, event numbering
-  internal/executor/   Executor interface; codex.go / claude.go are stubs (M0 tasks D4, D5)
+  internal/executor/   Executor interface; claude.go (stream-json + PreToolUse hook), codex.go stub (D4)
   internal/registry/   capability detection (agent CLIs, GPUs)
 server/            helm-server (Node 22, TypeScript, Hono, postgres.js, zod 4, vitest)
   src/protocol.ts      zod mirror of the wire protocol
@@ -37,6 +37,7 @@ web/               board (to be scaffolded in task W1)
 ```bash
 make test            # everything: go test, vitest (incl. e2e with real helmd), typecheck
 cd daemon && go test ./...
+HELM_LIVE_CLAUDE=1 go test ./internal/supervisor -run Live -v   # real Claude Code through the real hook (costs a few cents)
 cd server && pnpm test && pnpm typecheck
 make dev-db          # Postgres 17 + pgvector in docker
 ```

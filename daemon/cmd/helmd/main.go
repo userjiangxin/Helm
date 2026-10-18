@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -105,7 +106,7 @@ func cmdRun(args []string) {
 
 	client := conn.New(conn.Options{ServerURL: *server, Token: token, Log: log}, &conn.MemSpool{})
 	sup := supervisor.New(client, supervisor.Options{
-		Executors: []executor.Executor{executor.NewCodex(), executor.NewClaude()},
+		Executors: []executor.Executor{executor.NewCodex(), executor.NewClaude(lookPath("claude"), selfPath(), filepath.Join(helmHome(), "run"))},
 		MaxRuns:   *maxRuns,
 		WorkRoot:  filepath.Join(helmHome(), "work"),
 		HookSock:  defaultSock(),
@@ -124,6 +125,20 @@ func cmdRun(args []string) {
 	}
 	log.Info("helmd started", "version", version, "server", *server)
 	client.Run(ctx, sup)
+}
+
+func lookPath(name string) string {
+	if p, err := exec.LookPath(name); err == nil {
+		return p
+	}
+	return name
+}
+
+func selfPath() string {
+	if p, err := os.Executable(); err == nil {
+		return p
+	}
+	return "helmd"
 }
 
 func cmdRegister(args []string) {

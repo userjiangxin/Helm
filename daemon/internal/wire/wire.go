@@ -198,6 +198,7 @@ const (
 	DirPause    DirectiveKind = "PAUSE"
 	DirRollback DirectiveKind = "ROLLBACK"
 	DirAbort    DirectiveKind = "ABORT"
+	DirComplete DirectiveKind = "COMPLETE"
 )
 
 type Directive struct {

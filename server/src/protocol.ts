@@ -84,7 +84,7 @@ export const Envelope = z.strictObject({
 });
 export type Envelope = z.infer<typeof Envelope>;
 
-export const DirectiveKind = z.enum(["CONTINUE", "STEER", "AMEND", "PAUSE", "ROLLBACK", "ABORT"]);
+export const DirectiveKind = z.enum(["CONTINUE", "STEER", "AMEND", "PAUSE", "ROLLBACK", "ABORT", "COMPLETE"]);
 export const Directive = z.strictObject({
   id: z.string(),
   run_id: z.string(),

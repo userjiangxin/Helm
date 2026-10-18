@@ -64,6 +64,7 @@ func (f *fakeCtl) lastState() wire.RunState {
 type fakeExec struct {
 	mu   sync.Mutex
 	sent []string
+	ev   chan executor.SessionEvent
 }
 
 func (e *fakeExec) Name() string { return "codex" }
@@ -78,8 +79,13 @@ func (e *fakeExec) Send(_ context.Context, _ executor.SessionID, m string) error
 }
 func (e *fakeExec) Interrupt(context.Context, executor.SessionID) error           { return nil }
 func (e *fakeExec) Stop(context.Context, executor.SessionID, time.Duration) error { return nil }
-func (e *fakeExec) Events() <-chan executor.SessionEvent                          { return nil }
-func (e *fakeExec) NativeRef(executor.SessionID) string                           { return "" }
+func (e *fakeExec) Events() <-chan executor.SessionEvent {
+	if e.ev == nil {
+		return nil
+	}
+	return e.ev
+}
+func (e *fakeExec) NativeRef(executor.SessionID) string { return "" }
 
 func assignment(id string, version int) wire.RunAssignment {
 	return wire.RunAssignment{RunID: id, Epoch: 1, Executor: "codex", Contract: wire.Contract{
@@ -153,5 +159,48 @@ func TestUnknownExecutorFails(t *testing.T) {
 	s.OnWake(context.Background(), "test")
 	if ctl.lastState() != wire.RunFailed || s.active() != 0 {
 		t.Fatalf("expected FAILED and slot freed, got %s / %d", ctl.lastState(), s.active())
+	}
+}
+
+func TestLateClaimDoesNotSkipNewerInstructions(t *testing.T) {
+	ctx := context.Background()
+	a := assignment("r1", 1)
+	a.Contract.Prompt = "do it"
+	ctl := &fakeCtl{queue: []wire.RunAssignment{a}}
+	ex := &fakeExec{ev: make(chan executor.SessionEvent, 8)}
+	s := New(ctl, Options{Executors: []executor.Executor{ex}, MaxRuns: 1})
+	s.OnWake(ctx, "test")
+
+	claim := func() {
+		ex.ev <- executor.SessionEvent{Session: "r1", Event: executor.Event{Type: wire.EvClaim, Data: wire.Claim{Kind: "done", Text: "ok"}}}
+	}
+	waitEvents := func(n int) {
+		for i := 0; i < 200; i++ {
+			ctl.mu.Lock()
+			got := len(ctl.events)
+			ctl.mu.Unlock()
+			if got >= n {
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+		t.Fatalf("expected %d events", n)
+	}
+
+	// A STEER is sent before the first turn's result arrives.
+	msg, _ := json.Marshal(map[string]string{"message": "also check label_v2"})
+	ctl.dirs = []wire.Directive{{ID: "d1", RunID: "r1", Kind: wire.DirSteer, ContractVersion: 1, Args: msg}}
+	s.OnWake(ctx, "test")
+	base := len(ctl.events)
+
+	claim() // late result of turn 1
+	waitEvents(base + 1)
+	if st := ctl.lastState(); st != wire.RunRunning {
+		t.Fatalf("turn-1 claim must not advance the run while the STEER is pending, got %s", st)
+	}
+	claim() // result of the STEER turn
+	waitEvents(base + 3)
+	if st := ctl.lastState(); st != wire.RunVerifying {
+		t.Fatalf("expected VERIFYING after the latest turn, got %s", st)
 	}
 }

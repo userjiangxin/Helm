@@ -30,6 +30,10 @@ type run struct {
 	exec    executor.Executor
 	session executor.SessionID
 	seq     int64
+	// turns counts user messages the agent has not finished answering. A claim only moves the
+	// run forward when it answers the latest message (turns reaches 0); otherwise a late result
+	// from an earlier turn could mark the run VERIFYING while newer instructions are pending.
+	turns int
 }
 
 type Supervisor struct {
@@ -63,8 +67,62 @@ func New(ctl Control, o Options) *Supervisor {
 		workRoot: o.WorkRoot, hookSock: o.HookSock, log: o.Log, runs: map[string]*run{}}
 	for _, e := range o.Executors {
 		s.executors[e.Name()] = e
+		if ch := e.Events(); ch != nil {
+			go s.pump(ch)
+		}
 	}
 	return s
+}
+
+// pump turns executor output into L1 events and state transitions. Sessions are keyed by run id.
+func (s *Supervisor) pump(ch <-chan executor.SessionEvent) {
+	ctx := context.Background()
+	for se := range ch {
+		s.mu.Lock()
+		r, ok := s.runs[string(se.Session)]
+		s.mu.Unlock()
+		if !ok {
+			continue
+		}
+		if se.Done {
+			s.mu.Lock()
+			st := r.state
+			s.mu.Unlock()
+			switch {
+			case isTerminal(st):
+			case se.Err != nil:
+				s.transition(ctx, r, wire.RunFailed, "agent process exited: "+se.Err.Error())
+				s.forget(r.a.RunID)
+			case st == wire.RunVerifying:
+				// Process ended after reporting done (e.g. stdin closed); keep VERIFYING for the reviewer.
+			default:
+				s.transition(ctx, r, wire.RunFailed, "agent process exited unexpectedly")
+				s.forget(r.a.RunID)
+			}
+			continue
+		}
+		s.emit(ctx, r, se.Event.Type, se.Event.Data)
+		if se.Event.Type == wire.EvClaim {
+			s.mu.Lock()
+			st := r.state
+			if r.turns > 0 {
+				r.turns--
+			}
+			latest := r.turns == 0
+			s.mu.Unlock()
+			if c, ok := se.Event.Data.(wire.Claim); ok && st == wire.RunRunning && latest {
+				if c.Kind == "done" {
+					s.transition(ctx, r, wire.RunVerifying, "agent reports the task is done; awaiting verification")
+				} else {
+					s.transition(ctx, r, wire.RunGated, "agent turn ended with an error")
+				}
+			}
+		}
+	}
+}
+
+func isTerminal(st wire.RunState) bool {
+	return st == wire.RunSucceeded || st == wire.RunFailed || st == wire.RunAborted
 }
 
 // ---------- conn.Handler ----------
@@ -147,7 +205,12 @@ func (s *Supervisor) start(ctx context.Context, a wire.RunAssignment) {
 		s.forget(a.RunID)
 		return
 	}
+	s.mu.Lock()
 	r.session = sess
+	if a.Contract.Prompt != "" {
+		r.turns = 1 // the executor sends the contract as the first message
+	}
+	s.mu.Unlock()
 	s.transition(ctx, r, wire.RunRunning, "executor started")
 }
 
@@ -225,8 +288,12 @@ func (s *Supervisor) apply(ctx context.Context, d wire.Directive) (wire.AckStatu
 	case wire.DirContinue:
 		r.engine.SetPaused(false)
 		s.transition(ctx, r, wire.RunRunning, "CONTINUE")
-		if args.Message != "" {
-			_ = r.exec.Send(ctx, r.session, args.Message)
+		msg := args.Message
+		if msg == "" {
+			msg = "Helm: approved. Continue with the task."
+		}
+		if err := s.send(ctx, r, msg); err != nil {
+			return wire.AckFailed, err.Error()
 		}
 	case wire.DirAmend:
 		if args.Scope == nil {
@@ -236,15 +303,36 @@ func (s *Supervisor) apply(ctx context.Context, d wire.Directive) (wire.AckStatu
 		r.a.Contract.Version = d.ContractVersion
 		r.a.Contract.Scope = *args.Scope
 		if args.Message != "" {
-			_ = r.exec.Send(ctx, r.session, args.Message)
+			if err := s.send(ctx, r, args.Message); err != nil {
+				return wire.AckFailed, "scope updated but message not delivered: " + err.Error()
+			}
 		}
 	case wire.DirSteer:
-		if err := r.exec.Send(ctx, r.session, args.Message); err != nil {
+		if args.Message == "" {
+			return wire.AckRejectedInvalid, "STEER needs args.message"
+		}
+		if err := s.send(ctx, r, args.Message); err != nil {
 			return wire.AckFailed, err.Error()
 		}
-	case wire.DirAbort:
+		s.mu.Lock()
+		st := r.state
+		s.mu.Unlock()
+		if st == wire.RunVerifying || st == wire.RunGated {
+			s.transition(ctx, r, wire.RunRunning, "STEER")
+		}
+	case wire.DirComplete:
+		s.mu.Lock()
+		st := r.state
+		s.mu.Unlock()
+		if st != wire.RunVerifying {
+			return wire.AckRejectedInvalid, "COMPLETE requires VERIFYING, run is " + string(st)
+		}
+		s.transition(ctx, r, wire.RunSucceeded, "accepted by reviewer")
 		_ = r.exec.Stop(ctx, r.session, 10*time.Second)
-		s.transition(ctx, r, wire.RunAborted, "ABORT")
+		s.forget(r.a.RunID)
+	case wire.DirAbort:
+		s.transition(ctx, r, wire.RunAborted, "ABORT") // first, so the exit is not reported as a failure
+		_ = r.exec.Stop(ctx, r.session, 10*time.Second)
 		s.forget(r.a.RunID)
 	case wire.DirRollback:
 		return wire.AckFailed, "ROLLBACK not implemented yet (M1)"
@@ -252,6 +340,17 @@ func (s *Supervisor) apply(ctx context.Context, d wire.Directive) (wire.AckStatu
 		return wire.AckRejectedInvalid, "unknown directive " + string(d.Kind)
 	}
 	return wire.AckApplied, ""
+}
+
+// send delivers a user message to the agent and records that a new turn is outstanding.
+func (s *Supervisor) send(ctx context.Context, r *run, msg string) error {
+	if err := r.exec.Send(ctx, r.session, msg); err != nil {
+		return err
+	}
+	s.mu.Lock()
+	r.turns++
+	s.mu.Unlock()
+	return nil
 }
 
 func digest(r policy.Request) string {
