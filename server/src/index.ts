@@ -1,13 +1,15 @@
-// helm-server entrypoint. Applies pending migrations, then serves.
+// helm-server entrypoint. Applies pending migrations, then serves API + board.
+//   DATABASE_URL=postgres://…        production
+//   DATABASE_URL=pglite:./helm-data   zero-install single-machine mode
 import { migrate } from "./migrate.js";
-import { connect } from "./pg.js";
+import { connectAny } from "./pg.js";
 import { startServer } from "./server.js";
 
-const { pg, sql } = connect();
-await migrate(sql, undefined, console.log);
+const db = await connectAny();
+await migrate(db.sql, undefined, console.log);
 const { port } = await startServer({
-  sql,
-  listen: (cb) => pg.listen("helm", cb),
+  sql: db.sql,
+  listen: db.listen,
   port: Number(process.env.PORT ?? 8080),
   // Bind to localhost and expose with `tailscale serve`, or set HOST to the tailnet IP.
   host: process.env.HOST ?? "127.0.0.1",

@@ -43,14 +43,14 @@
 
 ### 看板（web）
 
-开始前先加载 `frontend-design` skill。技术栈：Vite + React + TypeScript + Tailwind + shadcn/ui + TanStack Query + dnd-kit；实时更新只用 `/api/stream` 这一个 SSE 流。
+开始前先加载 `frontend-design` skill。技术栈：Vite + React + TypeScript + TanStack Query + dnd-kit，样式是 `web/src/styles.css` 里的一套 CSS 变量（不用 Tailwind）；实时更新只用 `/api/stream` 这一个 SSE 流。设计约定：只有“等你拍板”使用琥珀色强调，其余状态保持低饱和。
 
 | ID | 任务 | 完成标准 | 建议模型 |
 | --- | --- | --- | --- |
-| W1 | 脚手架、路由、API 客户端（类型从 `server/src/protocol.ts` 引入）、SSE hook | `pnpm dev` 可用；SSE 断开后自动重连 | Sonnet |
-| W2 | 看板页：按状态分列，卡片显示机器、执行器、Run 状态、最新一条事件；可拖拽 | 数据库里改状态，卡片 1 秒内移动 | Sonnet |
-| W3 | 任务详情页：左侧任务树、中间 Run 时间线（按事件类型渲染，hold 高亮）、右侧 Contract 与指令按钮（继续、引导、暂停、终止） | 在页面上点“暂停”，agent 的下一次工具调用被拒绝 | Sonnet |
-| W4 | 机器页：在线状态、agent CLI 版本、GPU 占用、正在跑的 Run；生成注册码 | 新机器注册后 15 秒内出现在列表 | Sonnet |
+| ~~W1~~ ✅ | 脚手架、路由、API 客户端（类型从 `server/src/protocol.ts` 引入）、SSE hook | `pnpm dev` 可用；SSE 断开后自动重连 | Sonnet |
+| ~~W2~~ ✅ | 看板页：按状态分列，卡片显示机器、执行器、Run 状态、最新一条事件；可拖拽 | 数据库里改状态，卡片 1 秒内移动 | Sonnet |
+| ~~W3~~ ✅ | 任务详情页：左侧任务树、中间 Run 时间线（按事件类型渲染，hold 高亮）、右侧 Contract 与指令按钮（继续、引导、暂停、终止） | 在页面上点“暂停”，agent 的下一次工具调用被拒绝 | Sonnet |
+| ~~W4~~ ✅ | 机器页：在线状态、agent CLI 版本、GPU 占用、正在跑的 Run；生成注册码 | 新机器注册后 15 秒内出现在列表 | Sonnet |
 | W5 | 审批收件箱：待审列表，附上下文，批准或拒绝 | 与 S2 联调通过 | Sonnet |
 
 ### 收尾

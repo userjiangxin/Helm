@@ -142,10 +142,13 @@ export async function sweep(sql: Sql, offlineAfterSeconds = 60): Promise<string[
   await sql.query(
     `UPDATE machine SET status = 'offline'
       WHERE status = 'online' AND last_seen_at < now() - make_interval(secs => $1)`, [offlineAfterSeconds]);
-  const rows = await sql.query<{ id: string }>(
+  const rows = await sql.query<{ id: string; task_id: string }>(
     `UPDATE run SET state = 'ORPHANED', state_reason = 'lease expired'
       WHERE lease_until < now() AND state NOT IN ('PENDING','ORPHANED','SUCCEEDED','FAILED','ABORTED')
-      RETURNING id`);
+      RETURNING id, task_id`);
+  if (rows.length) {
+    await sql.query(`UPDATE task SET status = 'blocked' WHERE id = ANY($1::text[])`, [rows.map((r) => r.task_id)]);
+  }
   return rows.map((r) => r.id);
 }
 
@@ -179,6 +182,12 @@ export async function ingestEvents(sql: Sql, machineId: string, runId: string, e
             WHERE id = $1`,
           [runId, to, String(e.data.reason ?? ""), TERMINAL_STATES],
         );
+        const column = TASK_COLUMN_FOR_RUN[to];
+        if (column) {
+          await tx.query(
+            `UPDATE task SET status = $2, updated_at = now()
+              WHERE id = (SELECT task_id FROM run WHERE id = $1) AND status <> 'cancelled'`, [runId, column]);
+        }
       }
       if (e.type === "evidence") {
         await tx.query(
@@ -191,6 +200,12 @@ export async function ingestEvents(sql: Sql, machineId: string, runId: string, e
     return inserted;
   });
 }
+
+/** Which board column a task moves to when its run enters a state. */
+export const TASK_COLUMN_FOR_RUN: Partial<Record<RunState, string>> = {
+  PREPARING: "running", RUNNING: "running", GATED: "running", SUSPENDED: "running",
+  VERIFYING: "verifying", SUCCEEDED: "done", FAILED: "blocked", ABORTED: "blocked",
+};
 
 // ---------- directives ----------
 

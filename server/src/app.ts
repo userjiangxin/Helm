@@ -174,6 +174,41 @@ export function buildApp(sql: Sql, hub: Hub, upgradeWebSocket: UpgradeWebSocket)
     return c.json({ id }, 201);
   });
 
+  api.get("/tasks/:id", async (c) => {
+    const id = c.req.param("id");
+    const [task] = await sql.query(`SELECT * FROM task WHERE id = $1`, [id]);
+    if (!task) throw new HttpError(404, "task not found");
+    const [contracts, runs, children] = await Promise.all([
+      sql.query(`SELECT version, body, author, reason, created_at FROM contract WHERE task_id = $1 ORDER BY version DESC`, [id]),
+      sql.query(`SELECT r.*, m.name AS machine_name FROM run r LEFT JOIN machine m ON m.id = r.machine_id
+                  WHERE r.task_id = $1 ORDER BY r.created_at DESC`, [id]),
+      sql.query(`SELECT id, title, status FROM task WHERE parent_id = $1 ORDER BY position`, [id]),
+    ]);
+    return c.json({ task, contracts, runs, children });
+  });
+
+  // Drag on the board: change column and/or position (fractional index computed by the client).
+  api.patch("/tasks/:id", async (c) => {
+    const b = z.object({
+      status: z.enum(["inbox", "planning", "awaiting_approval", "running", "verifying", "done", "blocked", "cancelled"]).optional(),
+      position: z.number().optional(),
+      title: z.string().min(1).optional(),
+    }).parse(await c.req.json());
+    const rows = await sql.query(
+      `UPDATE task SET status = COALESCE($2, status), position = COALESCE($3, position),
+              title = COALESCE($4, title), updated_at = now()
+        WHERE id = $1 RETURNING id`, [c.req.param("id"), b.status ?? null, b.position ?? null, b.title ?? null]);
+    if (rows.length === 0) throw new HttpError(404, "task not found");
+    return c.body(null, 204);
+  });
+
+  // Runs that need the human, across all goals (the board's top strip).
+  api.get("/attention", async (c) =>
+    c.json(await sql.query(
+      `SELECT r.id AS run_id, r.state, r.state_reason, r.task_id, t.title, t.goal_id, m.name AS machine_name, r.created_at
+         FROM run r JOIN task t ON t.id = r.task_id LEFT JOIN machine m ON m.id = r.machine_id
+        WHERE r.state IN ('GATED','VERIFYING','ORPHANED') ORDER BY r.created_at`)));
+
   api.post("/tasks/:id/dispatch", async (c) => c.json({ run_id: await S.dispatchRun(sql, c.req.param("id")) }, 201));
 
   api.get("/runs/:id/events", async (c) =>

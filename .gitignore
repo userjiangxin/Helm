@@ -3,3 +3,5 @@ dist/
 bin/
 *.log
 .env
+web/dist/
+.helm-data/
