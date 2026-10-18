@@ -44,6 +44,10 @@ type Supervisor struct {
 	hookSock  string
 	log       *slog.Logger
 
+	load interface {
+		Sample(context.Context) wire.Load
+	}
+
 	wakeMu sync.Mutex // serializes OnWake so claims never race
 
 	mu       sync.Mutex
@@ -57,6 +61,9 @@ type Options struct {
 	WorkRoot  string // e.g. ~/helm-work; worktrees live under it
 	HookSock  string
 	Log       *slog.Logger
+	Load      interface {
+		Sample(context.Context) wire.Load
+	} // optional heartbeat load sampler
 }
 
 func New(ctl Control, o Options) *Supervisor {
@@ -64,7 +71,7 @@ func New(ctl Control, o Options) *Supervisor {
 		o.Log = slog.Default()
 	}
 	s := &Supervisor{ctl: ctl, executors: map[string]executor.Executor{}, maxRuns: o.MaxRuns,
-		workRoot: o.WorkRoot, hookSock: o.HookSock, log: o.Log, runs: map[string]*run{}}
+		workRoot: o.WorkRoot, hookSock: o.HookSock, log: o.Log, load: o.Load, runs: map[string]*run{}}
 	for _, e := range o.Executors {
 		s.executors[e.Name()] = e
 		if ch := e.Events(); ch != nil {
@@ -134,8 +141,11 @@ func (s *Supervisor) Heartbeat() wire.Heartbeat {
 	for id := range s.runs {
 		ids = append(ids, id)
 	}
-	// TODO(M0-D6): fill Load from gopsutil / nvidia-smi sampling.
-	return wire.Heartbeat{RunningRuns: ids}
+	hb := wire.Heartbeat{RunningRuns: ids}
+	if s.load != nil {
+		hb.Load = s.load.Sample(context.Background())
+	}
+	return hb
 }
 
 func (s *Supervisor) OnWake(ctx context.Context, reason string) {

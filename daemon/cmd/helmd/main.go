@@ -111,6 +111,7 @@ func cmdRun(args []string) {
 		WorkRoot:  filepath.Join(helmHome(), "work"),
 		HookSock:  defaultSock(),
 		Log:       log,
+		Load:      registry.NewLoadSampler(),
 	})
 
 	hs, err := hook.Listen(defaultSock(), sup)
