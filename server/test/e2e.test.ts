@@ -68,7 +68,8 @@ it.skipIf(!hasGo)("helmd registers, heartbeats, wakes on dispatch, claims and re
   const run = await waitFor(async () => (await sql.query<{ state: string; machine_id: string; state_reason: string }>(
     `SELECT state, machine_id, state_reason FROM run WHERE id=$1 AND state='FAILED'`, [runId]))[0]);
   expect(run.machine_id).toBe(machineId);
-  expect(run.state_reason).toMatch(/not implemented/); // codex executor stub (M0 task D4)
+  // No codex binary on the test box: the executor fails to start and the failure reaches the board.
+  expect(run.state_reason).toMatch(/codex/);
   expect(Date.now() - t0).toBeLessThan(5_000); // woken by push, not by the 30s poll
 
   const events = await sql.query<{ type: string; data: { to: string } }>(`SELECT type, data FROM run_event WHERE run_id=$1 ORDER BY seq`, [runId]);
