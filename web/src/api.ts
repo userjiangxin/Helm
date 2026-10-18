@@ -29,6 +29,11 @@ export interface TaskDetail {
 }
 export interface RunEvent { seq: number; ts: string; type: string; data: Record<string, unknown> }
 export interface Attention { run_id: string; state: RunState; state_reason: string; task_id: string; title: string; goal_id: string; machine_name: string | null }
+export interface Approval {
+  id: string; run_id: string; task_id: string; task_title: string | null; kind: "gate" | "contract" | "question";
+  question: string; context: { tool?: string; input_digest?: string; reason?: string };
+  options: { id: "allow_dir" | "reject"; label: string; path?: string }[]; created_at: string;
+}
 export interface Machine {
   id: string; name: string; labels: string[]; status: "online" | "offline" | "draining"; last_seen_at: string | null;
   capabilities: { agents?: { name: string; version: string }[]; gpus?: { index: number; name: string; mem_total_mb: number }[]; os?: string; arch?: string };
@@ -63,6 +68,9 @@ export const api = {
   directive: (runId: string, kind: DirectiveKind, args?: Record<string, unknown>) =>
     call<{ id: string }>("POST", `/runs/${runId}/directives`, { kind, args }),
   attention: () => call<Attention[]>("GET", "/attention"),
+  approvals: (runId?: string) => call<Approval[]>("GET", `/approvals${runId ? `?run=${runId}` : ""}`),
+  decide: (id: string, option: Approval["options"][number]["id"], note?: string) =>
+    call<{ directiveId: string }>("POST", `/approvals/${id}/decide`, { option, note }),
   machines: () => call<Machine[]>("GET", "/machines"),
   registrationCode: () => call<{ code: string }>("POST", "/machines/registration-codes"),
 };

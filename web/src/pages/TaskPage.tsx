@@ -53,6 +53,7 @@ export function TaskPage() {
       </section>
 
       <section className="right" aria-label="控制">
+        {run?.state === "GATED" && <ApprovalCard runId={run.id} />}
         <Controls taskId={task.id} run={run} canDispatch={!runs.some((r) => ACTIVE.includes(r.state)) && !!contract} />
         {contract && <ContractView v={contract.version} c={contract.body} />}
       </section>
@@ -172,6 +173,37 @@ function ContractView({ v, c }: { v: number; c: import("../api").Contract }) {
         {!!c.scope.readonly_paths?.length && <div><dt>只读</dt><dd><ul>{c.scope.readonly_paths.map((p) => <li key={p}>{p}</li>)}</ul></dd></div>}
         {!!c.acceptance?.length && <div><dt>验收标准</dt><dd><ul>{c.acceptance.map((a) => <li key={a}>{a}</li>)}</ul></dd></div>}
       </dl>
+    </div>
+  );
+}
+
+function ApprovalCard({ runId }: { runId: string }) {
+  const qc = useQueryClient();
+  const [note, setNote] = useState("");
+  const q = useQuery({ queryKey: ["approvals", runId], queryFn: () => api.approvals(runId) });
+  const decide = useMutation({
+    mutationFn: ({ id, option }: { id: string; option: "allow_dir" | "reject" }) => api.decide(id, option, note.trim() || undefined),
+    onSuccess: () => { setNote(""); void qc.invalidateQueries(); },
+  });
+  const a = q.data?.[0];
+  if (!a) return null;
+  return (
+    <div className="approval" role="region" aria-label="待你拍板">
+      <h2>待你拍板</h2>
+      <p>agent 想用 <b>{a.context.tool}</b> {a.context.reason ? reasonText(a.context.reason) : a.question}</p>
+      <label className="field"><span>附言（可选，会转给 agent）</span>
+        <input className="input" value={note} onChange={(e) => setNote(e.target.value)} />
+      </label>
+      <div className="btns">
+        {a.options.map((o) => (
+          <button key={o.id} className={`btn ${o.id === "reject" ? "" : "signal"}`} disabled={decide.isPending}
+            onClick={() => decide.mutate({ id: a.id, option: o.id })}>
+            {o.id === "allow_dir" ? `批准，允许写入 ${o.path}` : o.label}
+          </button>
+        ))}
+      </div>
+      {a.options.length === 1 && <p className="hint">高风险命令不会被自动放行。确实需要的话，请自己在机器上执行。</p>}
+      {decide.error && <p className="error">{decide.error.message}</p>}
     </div>
   );
 }

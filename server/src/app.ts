@@ -221,8 +221,17 @@ export function buildApp(sql: Sql, hub: Hub, upgradeWebSocket: UpgradeWebSocket)
     return c.json({ id: await S.issueDirective(sql, { runId: c.req.param("id"), kind: b.kind, args: b.args, issuedBy: "human" }) }, 201);
   });
 
-  api.get("/approvals", async (c) =>
-    c.json(await sql.query(`SELECT * FROM approval WHERE decided_at IS NULL ORDER BY created_at`)));
+  api.get("/approvals", async (c) => {
+    const runId = c.req.query("run");
+    return c.json(await sql.query(
+      `SELECT a.*, t.title AS task_title FROM approval a LEFT JOIN task t ON t.id = a.task_id
+        WHERE a.decided_at IS NULL AND ($1::text IS NULL OR a.run_id = $1) ORDER BY a.created_at`, [runId ?? null]));
+  });
+
+  api.post("/approvals/:id/decide", async (c) => {
+    const b = z.object({ option: z.enum(["allow_dir", "reject"]), note: z.string().optional() }).parse(await c.req.json());
+    return c.json(await S.decideApproval(sql, c.req.param("id"), b));
+  });
 
   // Live updates for the board: one SSE stream carrying every NOTIFY payload.
   api.get("/stream", (c) =>

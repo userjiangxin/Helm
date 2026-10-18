@@ -36,7 +36,7 @@
 | ID | 任务 | 完成标准 | 建议模型 |
 | --- | --- | --- | --- |
 | ~~S1~~ ✅ | 迁移执行器：`pnpm migrate` 按文件名顺序执行 `db/migrations`，用 `schema_migrations` 表记录 | 重复执行无副作用 | Sonnet |
-| S2 | hold → 审批：收到 `decision=hold` 的 tool_call 事件时创建 approval（附工具调用上下文）；批准接口生成 CONTINUE（或带新 scope 的 AMEND + 新 contract 版本），拒绝接口生成 STEER 或 ABORT | 测试覆盖“越界 → 审批 → 批准 → 新 contract 版本 → AMEND 下发”全链路 | **Opus** |
+| ~~S2~~ ✅ | hold → 审批：收到 `decision=hold` 的 tool_call 事件时创建 approval（附工具调用上下文）；批准接口生成 CONTINUE（或带新 scope 的 AMEND + 新 contract 版本），拒绝接口生成 STEER 或 ABORT | 测试覆盖“越界 → 审批 → 批准 → 新 contract 版本 → AMEND 下发”全链路 | **Opus** |
 | S3 | 看板 API 补全：任务拖拽（status、position）、按任务列出 Run 历史、人工创建新 contract 版本 | 接口都有 PGlite 测试 | Sonnet |
 | S4 | 部署：`docker-compose.yml`（Postgres 17 + pgvector、server、web），以及 `tailscale serve` 的配置说明 | 新机器按文档 15 分钟内跑起来 | Sonnet |
 | S5 | 看板鉴权：信任 `tailscale serve` 注入的身份头，只允许你的 Tailscale 账号；直连时退回单用户口令 | 未经 Tailscale 的请求拿不到 `/api/*` | Sonnet |
@@ -51,13 +51,21 @@
 | ~~W2~~ ✅ | 看板页：按状态分列，卡片显示机器、执行器、Run 状态、最新一条事件；可拖拽 | 数据库里改状态，卡片 1 秒内移动 | Sonnet |
 | ~~W3~~ ✅ | 任务详情页：左侧任务树、中间 Run 时间线（按事件类型渲染，hold 高亮）、右侧 Contract 与指令按钮（继续、引导、暂停、终止） | 在页面上点“暂停”，agent 的下一次工具调用被拒绝 | Sonnet |
 | ~~W4~~ ✅ | 机器页：在线状态、agent CLI 版本、GPU 占用、正在跑的 Run；生成注册码 | 新机器注册后 15 秒内出现在列表 | Sonnet |
-| W5 | 审批收件箱：待审列表，附上下文，批准或拒绝 | 与 S2 联调通过 | Sonnet |
+| ~~W5~~ ✅ | 审批收件箱：待审列表，附上下文，批准或拒绝 | 与 S2 联调通过 | Sonnet |
 
 ### 收尾
 
 | ID | 任务 | 完成标准 |
 | --- | --- | --- |
 | E1 | M0 验收演示：本机跑 Claude Code、云主机或 GPU 机跑 Codex，各派一个任务；在看板上对其中一个 PAUSE → STEER → CONTINUE，对另一个 ABORT | 录屏留档；把遇到的问题记入 M1 |
+
+## 实现中顺带完成
+
+- 心跳对账：daemon 不再上报的 Run（例如 helmd 重启后）在下一次心跳时立即标记为失联，不必等租约过期
+- 对 daemon 已不认识的 Run 下发 ABORT 时，由服务端直接终止
+- AMEND 带说明时会解除闸门（GATED → RUNNING），让 agent 开始新的一轮
+- 新增 `COMPLETE` 指令：人工验收通过后结束 Run（迁移 0002）
+- 零安装模式：`DATABASE_URL=pglite:<目录>`，以及 `make demo`
 
 ## 推荐顺序
 

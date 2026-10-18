@@ -10,6 +10,7 @@ const RULES: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^command denied by contract, needs approval: (.+)$/, (m) => `Contract 禁止的命令：${m[1]}`],
   [/^accepted by reviewer$/, () => "已验收"],
   [/^lease expired$/, () => "机器失联（租约过期）"],
+  [/^not reported by its machine/, () => "机器不再上报这个任务（helmd 可能重启过）"],
   [/^agent process exited: (.+)$/, (m) => `agent 进程退出：${m[1]}`],
   [/^agent process exited unexpectedly$/, () => "agent 进程意外退出"],
   [/^executor not available on this machine: (.+)$/, (m) => `这台机器没有执行器 ${m[1]}`],

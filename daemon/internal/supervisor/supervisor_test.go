@@ -204,3 +204,24 @@ func TestLateClaimDoesNotSkipNewerInstructions(t *testing.T) {
 		t.Fatalf("expected VERIFYING after the latest turn, got %s", st)
 	}
 }
+
+func TestAmendReleasesGate(t *testing.T) {
+	ctx := context.Background()
+	ctl := &fakeCtl{queue: []wire.RunAssignment{assignment("r1", 1)}}
+	ex := &fakeExec{}
+	s := New(ctl, Options{Executors: []executor.Executor{ex}, MaxRuns: 1})
+	s.OnWake(ctx, "test")
+	s.Decide("r1", policy.Request{Tool: "Write", Paths: []string{"/shared/x.py"}})
+	if ctl.lastState() != wire.RunGated {
+		t.Fatalf("want GATED, got %s", ctl.lastState())
+	}
+	args, _ := json.Marshal(map[string]any{"scope": wire.Scope{WritePaths: []string{"/shared/**"}}, "message": "approved"})
+	ctl.dirs = []wire.Directive{{ID: "d1", RunID: "r1", Kind: wire.DirAmend, ContractVersion: 2, Args: args}}
+	s.OnWake(ctx, "test")
+	if ctl.lastState() != wire.RunRunning || ctl.acks[0].Status != wire.AckApplied {
+		t.Fatalf("AMEND with a message must release the gate: state=%s ack=%s", ctl.lastState(), ctl.acks[0].Status)
+	}
+	if d := s.Decide("r1", policy.Request{Tool: "Write", Paths: []string{"/shared/x.py"}}); d.Action != policy.Allow {
+		t.Fatalf("approved path should now be allowed, got %s", d.Action)
+	}
+}

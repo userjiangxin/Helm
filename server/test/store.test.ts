@@ -115,3 +115,21 @@ describe("leases", () => {
     expect(await S.sweep(sql)).toEqual([lose]);
   });
 });
+
+describe("reconcile", () => {
+  it("a run missing from heartbeats is orphaned; ABORT of an unknown run finishes it server-side", async () => {
+    const m = await machine("m1", ["codex"]);
+    const a = await S.dispatchRun(sql, await task());
+    const b = await S.dispatchRun(sql, await task());
+    await S.claimRuns(sql, m.machineId, 2);
+    await sql.query(`UPDATE run SET started_at = now() - interval '1 minute'`);
+    await S.heartbeat(sql, m.machineId, [b], { running_runs: [b], load: {} });
+    const states = await sql.query<{ id: string; state: string }>(`SELECT id, state FROM run ORDER BY id`);
+    expect(Object.fromEntries(states.map((r) => [r.id, r.state]))).toEqual({ [a]: "ORPHANED", [b]: "PREPARING" });
+
+    const d = await S.issueDirective(sql, { runId: a, kind: "ABORT", issuedBy: "human" });
+    await S.ackDirective(sql, m.machineId, d, "rejected_invalid", "run not on this machine");
+    const [r] = await sql.query<{ state: string }>(`SELECT state FROM run WHERE id = $1`, [a]);
+    expect(r!.state).toBe("ABORTED");
+  });
+});

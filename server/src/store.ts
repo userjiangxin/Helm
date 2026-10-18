@@ -135,6 +135,15 @@ export async function heartbeat(sql: Sql, machineId: string, runningRuns: string
       WHERE machine_id = $1 AND id = ANY($2::text[]) AND state <> ALL($4::text[])`,
     [machineId, runningRuns, leaseSeconds, TERMINAL_STATES],
   );
+  // Reconcile: a run this machine should hold but no longer reports (e.g. helmd restarted) is orphaned now,
+  // not when its lease runs out. The 30s grace covers runs claimed moments before this heartbeat.
+  const lost = await sql.query<{ task_id: string }>(
+    `UPDATE run SET state = 'ORPHANED', state_reason = 'not reported by its machine (daemon restarted?)'
+      WHERE machine_id = $1 AND NOT (id = ANY($2::text[]))
+        AND state NOT IN ('PENDING','ORPHANED','SUCCEEDED','FAILED','ABORTED')
+        AND started_at < now() - interval '30 seconds'
+      RETURNING task_id`, [machineId, runningRuns]);
+  if (lost.length) await sql.query(`UPDATE task SET status = 'blocked' WHERE id = ANY($1::text[])`, [lost.map((r) => r.task_id)]);
 }
 
 /** Marks runs whose lease expired as ORPHANED and silent machines offline. Run every ~15s. */
@@ -189,6 +198,9 @@ export async function ingestEvents(sql: Sql, machineId: string, runId: string, e
               WHERE id = (SELECT task_id FROM run WHERE id = $1) AND status <> 'cancelled'`, [runId, column]);
         }
       }
+      if (e.type === "tool_call" && e.data.decision === "hold") {
+        await createGateApproval(tx, runId, e.data);
+      }
       if (e.type === "evidence") {
         await tx.query(
           `INSERT INTO evidence (run_id, uri, kind, bytes) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING`,
@@ -206,6 +218,71 @@ export const TASK_COLUMN_FOR_RUN: Partial<Record<RunState, string>> = {
   PREPARING: "running", RUNNING: "running", GATED: "running", SUSPENDED: "running",
   VERIFYING: "verifying", SUCCEEDED: "done", FAILED: "blocked", ABORTED: "blocked",
 };
+
+// ---------- approvals (gates) ----------
+
+/** A held tool call becomes an approval the human (later: the brain) decides. */
+async function createGateApproval(tx: Sql, runId: string, data: Record<string, unknown>) {
+  const reason = String(data.reason ?? "");
+  const outside = reason.match(/^write outside contract scope: (.+)$/);
+  const options = outside
+    ? [{ id: "allow_dir", label: "批准，并允许写入这个目录", path: parentGlob(outside[1]!) }, { id: "reject", label: "不批准" }]
+    : [{ id: "reject", label: "不批准" }]; // high-risk commands are never auto-allowed; run them yourself if needed
+  await tx.query(
+    `INSERT INTO approval (id, run_id, task_id, kind, question, context, options)
+     SELECT $1, $2, task_id, 'gate', $3, $4, $5 FROM run WHERE id = $2`,
+    [newId("apr"), runId, reason, JSON.stringify(data), JSON.stringify(options)],
+  );
+}
+
+/** "/a/b/c.py" → "/a/b/**" */
+export function parentGlob(path: string): string {
+  const i = path.lastIndexOf("/");
+  return (i > 0 ? path.slice(0, i) : path) + "/**";
+}
+
+export type ApprovalDecision = { option: "allow_dir" | "reject"; note?: string };
+
+/**
+ * Applies a decision. allow_dir: new contract version with the directory added to write_paths,
+ * then AMEND (full scope + message). reject: CONTINUE with a message telling the agent to move on.
+ */
+export async function decideApproval(sql: Sql, approvalId: string, d: ApprovalDecision, by: "human" | "brain" = "human") {
+  return sql.tx(async (tx) => {
+    const [a] = await tx.query<{ run_id: string; task_id: string; options: { id: string; path?: string }[]; decided_at: unknown }>(
+      `SELECT run_id, task_id, options, decided_at FROM approval WHERE id = $1 FOR UPDATE`, [approvalId]);
+    if (!a) throw new HttpError(404, "approval not found");
+    if (a.decided_at) throw new HttpError(409, "approval already decided");
+    const opt = a.options.find((o) => o.id === d.option);
+    if (!opt) throw new HttpError(400, `option ${d.option} is not offered for this approval`);
+
+    let directiveId: string;
+    if (d.option === "allow_dir") {
+      const [cur] = await tx.query<{ version: number; body: Contract }>(
+        `SELECT c.version, c.body FROM run r JOIN contract c ON c.task_id = r.task_id AND c.version = r.contract_version
+          WHERE r.id = $1`, [a.run_id]);
+      if (!cur) throw new HttpError(409, "run has no contract");
+      const [max] = await tx.query<{ v: number }>(`SELECT max(version) AS v FROM contract WHERE task_id = $1`, [a.task_id]);
+      const version = Number(max!.v) + 1;
+      const scope = { ...cur.body.scope, write_paths: [...new Set([...cur.body.scope.write_paths, opt.path!])] };
+      const body: Contract = { ...cur.body, version, scope };
+      await tx.query(`INSERT INTO contract (task_id, version, body, author, reason) VALUES ($1, $2, $3, $4, $5)`,
+        [a.task_id, version, JSON.stringify(body), by, `approved write to ${opt.path}`]);
+      await tx.query(`UPDATE task SET current_contract_version = $2 WHERE id = $1`, [a.task_id, version]);
+      await tx.query(`UPDATE run SET contract_version = $2 WHERE id = $1`, [a.run_id, version]);
+      const message = `Helm: approved. You may now write under ${opt.path}. Retry the action that was held and finish the task.` +
+        (d.note ? ` Reviewer note: ${d.note}` : "");
+      directiveId = await issueDirective(tx, { runId: a.run_id, kind: "AMEND", args: { scope, message }, issuedBy: by });
+    } else {
+      const message = "Helm: the held action was NOT approved. Do not attempt it again or work around it. " +
+        "Finish the remaining parts and report what is left undone." + (d.note ? ` Reviewer note: ${d.note}` : "");
+      directiveId = await issueDirective(tx, { runId: a.run_id, kind: "CONTINUE", args: { message }, issuedBy: by });
+    }
+    await tx.query(`UPDATE approval SET decision = $2, decided_by = $3, decided_at = now() WHERE id = $1`,
+      [approvalId, JSON.stringify(d), by]);
+    return { directiveId };
+  });
+}
 
 // ---------- directives ----------
 
@@ -238,11 +315,19 @@ export async function pendingDirectives(sql: Sql, machineId: string, after: stri
 }
 
 export async function ackDirective(sql: Sql, machineId: string, id: string, status: string, detail?: string) {
-  const rows = await sql.query(
+  const rows = await sql.query<{ kind: string; run_id: string }>(
     `UPDATE directive SET status = $3, ack_detail = $4, acked_at = now()
-      WHERE id = $1 AND machine_id = $2 AND status = 'queued' RETURNING id`,
+      WHERE id = $1 AND machine_id = $2 AND status = 'queued' RETURNING kind, run_id`,
     [id, machineId, status, detail ?? null],
   );
+  // An ABORT for a run the daemon no longer holds still means "stop it": finish it here.
+  const d = rows[0];
+  if (d?.kind === "ABORT" && status === "rejected_invalid") {
+    const r = await sql.query<{ task_id: string }>(
+      `UPDATE run SET state = 'ABORTED', state_reason = 'ABORT', ended_at = now()
+        WHERE id = $1 AND state NOT IN ('SUCCEEDED','FAILED','ABORTED') RETURNING task_id`, [d.run_id]);
+    if (r[0]) await sql.query(`UPDATE task SET status = 'blocked' WHERE id = $1`, [r[0].task_id]);
+  }
   return rows.length > 0;
 }
 

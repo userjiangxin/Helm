@@ -300,9 +300,17 @@ func (s *Supervisor) apply(ctx context.Context, d wire.Directive) (wire.AckStatu
 			return wire.AckRejectedInvalid, "AMEND needs args.scope"
 		}
 		r.engine.Apply(*args.Scope)
+		s.mu.Lock()
 		r.a.Contract.Version = d.ContractVersion
 		r.a.Contract.Scope = *args.Scope
+		st := r.state
+		s.mu.Unlock()
 		if args.Message != "" {
+			// An AMEND that answers a gate also releases it: the agent gets a new turn.
+			if st == wire.RunGated || st == wire.RunSuspended {
+				r.engine.SetPaused(false)
+				s.transition(ctx, r, wire.RunRunning, "AMEND")
+			}
 			if err := s.send(ctx, r, args.Message); err != nil {
 				return wire.AckFailed, "scope updated but message not delivered: " + err.Error()
 			}
