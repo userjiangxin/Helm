@@ -3,6 +3,8 @@ package supervisor
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -10,6 +12,7 @@ import (
 	"github.com/helm/helm/daemon/internal/executor"
 	"github.com/helm/helm/daemon/internal/policy"
 	"github.com/helm/helm/daemon/internal/wire"
+	"github.com/helm/helm/daemon/internal/workspace"
 )
 
 type fakeCtl struct {
@@ -68,8 +71,8 @@ type fakeExec struct {
 }
 
 func (e *fakeExec) Name() string { return "codex" }
-func (e *fakeExec) Start(context.Context, executor.RunSpec) (executor.SessionID, error) {
-	return "s1", nil
+func (e *fakeExec) Start(_ context.Context, spec executor.RunSpec) (executor.SessionID, error) {
+	return executor.SessionFor(spec), nil
 }
 func (e *fakeExec) Send(_ context.Context, _ executor.SessionID, m string) (bool, error) {
 	e.mu.Lock()
@@ -172,7 +175,7 @@ func TestLateClaimDoesNotSkipNewerInstructions(t *testing.T) {
 	s.OnWake(ctx, "test")
 
 	claim := func() {
-		ex.ev <- executor.SessionEvent{Session: "r1", Event: executor.Event{Type: wire.EvClaim, Data: wire.Claim{Kind: "done", Text: "ok"}}}
+		ex.ev <- executor.SessionEvent{Session: "r1#1", Event: executor.Event{Type: wire.EvClaim, Data: wire.Claim{Kind: "done", Text: "ok"}}}
 	}
 	waitEvents := func(n int) {
 		for i := 0; i < 200; i++ {
@@ -223,5 +226,58 @@ func TestAmendReleasesGate(t *testing.T) {
 	}
 	if d := s.Decide("r1", policy.Request{Tool: "Write", Paths: []string{"/shared/x.py"}}); d.Action != policy.Allow {
 		t.Fatalf("approved path should now be allowed, got %s", d.Action)
+	}
+}
+
+func TestStaleSessionEventsAreIgnored(t *testing.T) {
+	ctx := context.Background()
+	a := assignment("r1", 1)
+	a.Contract.Prompt = "go"
+	ctl := &fakeCtl{queue: []wire.RunAssignment{a}}
+	ex := &fakeExec{ev: make(chan executor.SessionEvent, 8)}
+	s := New(ctl, Options{Executors: []executor.Executor{ex}, MaxRuns: 1})
+	s.OnWake(ctx, "test")
+	// An exit from an older attempt (e.g. the session a ROLLBACK replaced) must not fail the run.
+	ex.ev <- executor.SessionEvent{Session: "r1#0", Done: true, Err: fmt.Errorf("killed")}
+	time.Sleep(50 * time.Millisecond)
+	if st := ctl.lastState(); st != wire.RunRunning {
+		t.Fatalf("stale session exit changed state to %s", st)
+	}
+}
+
+// The exit of the session a ROLLBACK replaces arrives while the new one starts; it must not fail the run.
+type rollbackExec struct {
+	fakeExec
+	s *Supervisor
+}
+
+func (e *rollbackExec) Stop(_ context.Context, sess executor.SessionID, _ time.Duration) error {
+	e.ev <- executor.SessionEvent{Session: sess, Done: true} // exit is reported synchronously, before launch
+	time.Sleep(20 * time.Millisecond)
+	return nil
+}
+
+func TestRollbackIgnoresOldSessionExit(t *testing.T) {
+	ctx := context.Background()
+	a := assignment("r1", 1)
+	a.Contract.Prompt = "go"
+	a.Contract.Workdir = t.TempDir() // must exist: the workspace manager checks it
+	ctl := &fakeCtl{queue: []wire.RunAssignment{a}}
+	ex := &rollbackExec{fakeExec: fakeExec{ev: make(chan executor.SessionEvent, 8)}}
+	wsm := workspace.New(t.TempDir())
+	s := New(ctl, Options{Executors: []executor.Executor{ex}, MaxRuns: 1, Workspaces: wsm})
+	s.OnWake(ctx, "test")
+	s.mu.Lock()
+	s.runs["r1"].ws.Snapshot = "fake" // pretend git workspace; Rollback will fail on the fake dir
+	s.mu.Unlock()
+	ctl.dirs = []wire.Directive{{ID: "d1", RunID: "r1", Kind: wire.DirRollback, ContractVersion: 1}}
+	s.OnWake(ctx, "test")
+	time.Sleep(50 * time.Millisecond)
+	ctl.mu.Lock()
+	defer ctl.mu.Unlock()
+	for _, e := range ctl.events {
+		if e.Type == wire.EvStateChange && strings.Contains(string(e.Data), "exited unexpectedly") {
+			t.Fatalf("old session exit was treated as current: %s", e.Data)
+		}
 	}
 }

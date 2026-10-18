@@ -133,7 +133,7 @@ func (c *Codex) Start(ctx context.Context, spec RunSpec) (SessionID, error) {
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start codex: %w", err)
 	}
-	sid := SessionID(spec.RunID)
+	sid := SessionFor(spec)
 	p := &codexProc{cmd: cmd, stdin: stdin, done: make(chan struct{}), pending: map[int64]chan rpcResponse{},
 		items: map[string][]string{}, seenErr: map[string]bool{}, decide: spec.Decide, sandbox: sandboxPolicy(spec.Workdir, spec.Contract.Scope)}
 	c.mu.Lock()

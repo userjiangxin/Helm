@@ -5,6 +5,8 @@ package executor
 
 import (
 	"context"
+	"fmt"
+	"strings"
 	"time"
 
 	"github.com/helm/helm/daemon/internal/policy"
@@ -16,6 +18,7 @@ type SessionID string
 // RunSpec is everything an executor needs to start one Run.
 type RunSpec struct {
 	RunID    string
+	Attempt  int    // bumped on ROLLBACK restarts; sessions are "<run>#<attempt>" so stale events can be told apart
 	Workdir  string // prepared git worktree or contract workdir
 	Contract wire.Contract
 	HookSock string // unix socket of the policy engine (claude executor wires it into PreToolUse)
@@ -55,4 +58,17 @@ type SessionEvent struct {
 	Event   Event
 	Done    bool  // session ended
 	Err     error // set when Done because of a failure
+}
+
+// SessionFor names a session; the supervisor parses the run id back out with RunOf.
+func SessionFor(spec RunSpec) SessionID {
+	return SessionID(fmt.Sprintf("%s#%d", spec.RunID, spec.Attempt))
+}
+
+// RunOf returns the run id of a session.
+func RunOf(s SessionID) string {
+	if i := strings.LastIndexByte(string(s), '#'); i >= 0 {
+		return string(s)[:i]
+	}
+	return string(s)
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/helm/helm/daemon/internal/executor"
 	"github.com/helm/helm/daemon/internal/policy"
 	"github.com/helm/helm/daemon/internal/wire"
+	"github.com/helm/helm/daemon/internal/workspace"
 )
 
 // Control is the subset of conn.Client the supervisor needs (an interface for tests).
@@ -34,19 +35,22 @@ type run struct {
 	// run forward when it answers the latest message (turns reaches 0); otherwise a late result
 	// from an earlier turn could mark the run VERIFYING while newer instructions are pending.
 	turns int
+
+	ws      workspace.Workspace
+	attempt int
 }
 
 type Supervisor struct {
 	ctl       Control
 	executors map[string]executor.Executor
 	maxRuns   int
-	workRoot  string
 	hookSock  string
 	log       *slog.Logger
 
 	load interface {
 		Sample(context.Context) wire.Load
 	}
+	wsm *workspace.Manager
 
 	wakeMu sync.Mutex // serializes OnWake so claims never race
 
@@ -58,12 +62,12 @@ type Supervisor struct {
 type Options struct {
 	Executors []executor.Executor
 	MaxRuns   int
-	WorkRoot  string // e.g. ~/helm-work; worktrees live under it
 	HookSock  string
 	Log       *slog.Logger
 	Load      interface {
 		Sample(context.Context) wire.Load
 	} // optional heartbeat load sampler
+	Workspaces *workspace.Manager // nil: use contract.workdir as is (tests)
 }
 
 func New(ctl Control, o Options) *Supervisor {
@@ -71,7 +75,7 @@ func New(ctl Control, o Options) *Supervisor {
 		o.Log = slog.Default()
 	}
 	s := &Supervisor{ctl: ctl, executors: map[string]executor.Executor{}, maxRuns: o.MaxRuns,
-		workRoot: o.WorkRoot, hookSock: o.HookSock, log: o.Log, load: o.Load, runs: map[string]*run{}}
+		hookSock: o.HookSock, log: o.Log, load: o.Load, wsm: o.Workspaces, runs: map[string]*run{}}
 	for _, e := range o.Executors {
 		s.executors[e.Name()] = e
 		if ch := e.Events(); ch != nil {
@@ -86,10 +90,11 @@ func (s *Supervisor) pump(ch <-chan executor.SessionEvent) {
 	ctx := context.Background()
 	for se := range ch {
 		s.mu.Lock()
-		r, ok := s.runs[string(se.Session)]
+		r, ok := s.runs[executor.RunOf(se.Session)]
+		current := ok && r.session == se.Session
 		s.mu.Unlock()
-		if !ok {
-			continue
+		if !current {
+			continue // unknown run, or a session replaced by a ROLLBACK restart
 		}
 		if se.Done {
 			s.mu.Lock()
@@ -204,26 +209,45 @@ func (s *Supervisor) start(ctx context.Context, a wire.RunAssignment) {
 	r.exec = ex
 	s.transition(ctx, r, wire.RunPreparing, "claimed")
 
-	// TODO(M0-D2): prepare an isolated git worktree under s.workRoot (shared bare clone
-	// cache per repo, like Multica's .repos), snapshot commit for ROLLBACK, link skills.
-	workdir := a.Contract.Workdir
-	r.engine = policy.New(workdir, a.Contract.Scope)
-
-	runID := a.RunID
-	sess, err := ex.Start(ctx, executor.RunSpec{RunID: a.RunID, Workdir: workdir, Contract: a.Contract, HookSock: s.hookSock,
-		Decide: func(req policy.Request) policy.Decision { return s.Decide(runID, req) }})
-	if err != nil {
+	ws := workspace.Workspace{Dir: a.Contract.Workdir}
+	if s.wsm != nil {
+		var err error
+		if ws, err = s.wsm.Prepare(ctx, a.RunID, a.Contract); err != nil {
+			s.transition(ctx, r, wire.RunFailed, "workspace: "+err.Error())
+			s.forget(a.RunID)
+			return
+		}
+	}
+	r.ws = ws
+	r.engine = policy.New(ws.Dir, a.Contract.Scope)
+	if err := s.launch(ctx, r, a.Contract); err != nil {
 		s.transition(ctx, r, wire.RunFailed, err.Error())
 		s.forget(a.RunID)
 		return
 	}
+	s.transition(ctx, r, wire.RunRunning, "executor started")
+}
+
+// launch starts a fresh agent session for the run (initially, and after ROLLBACK).
+func (s *Supervisor) launch(ctx context.Context, r *run, c wire.Contract) error {
+	runID := r.a.RunID
+	s.mu.Lock()
+	r.attempt++
+	spec := executor.RunSpec{RunID: runID, Attempt: r.attempt, Workdir: r.ws.Dir, Contract: c, HookSock: s.hookSock,
+		Decide: func(req policy.Request) policy.Decision { return s.Decide(runID, req) }}
+	s.mu.Unlock()
+	sess, err := r.exec.Start(ctx, spec)
+	if err != nil {
+		return err
+	}
 	s.mu.Lock()
 	r.session = sess
-	if a.Contract.Prompt != "" {
+	r.turns = 0
+	if c.Prompt != "" {
 		r.turns = 1 // the executor sends the contract as the first message
 	}
 	s.mu.Unlock()
-	s.transition(ctx, r, wire.RunRunning, "executor started")
+	return nil
 }
 
 func (s *Supervisor) forget(runID string) {
@@ -360,7 +384,34 @@ func (s *Supervisor) apply(ctx context.Context, d wire.Directive) (wire.AckStatu
 		_ = r.exec.Stop(ctx, r.session, 10*time.Second)
 		s.forget(r.a.RunID)
 	case wire.DirRollback:
-		return wire.AckFailed, "ROLLBACK not implemented yet (M1)"
+		if s.wsm == nil || r.ws.Snapshot == "" {
+			return wire.AckRejectedInvalid, "ROLLBACK needs a git workspace (contract.repo)"
+		}
+		s.transition(ctx, r, wire.RunPreparing, "ROLLBACK")
+		// Detach the old session first so its exit event is recognised as stale by pump.
+		s.mu.Lock()
+		old := r.session
+		r.session = ""
+		s.mu.Unlock()
+		_ = r.exec.Stop(ctx, old, 10*time.Second)
+		if err := s.wsm.Rollback(ctx, r.ws); err != nil {
+			s.transition(ctx, r, wire.RunFailed, "rollback: "+err.Error())
+			s.forget(r.a.RunID)
+			return wire.AckFailed, err.Error()
+		}
+		r.engine.SetPaused(false)
+		c := r.a.Contract
+		note := "Your previous attempt was rolled back: all its changes were discarded."
+		if args.Message != "" {
+			note += " Reviewer note: " + args.Message
+		}
+		c.Prompt = note + "\n\n" + c.Prompt
+		if err := s.launch(ctx, r, c); err != nil {
+			s.transition(ctx, r, wire.RunFailed, err.Error())
+			s.forget(r.a.RunID)
+			return wire.AckFailed, err.Error()
+		}
+		s.transition(ctx, r, wire.RunRunning, "restarted after ROLLBACK")
 	default:
 		return wire.AckRejectedInvalid, "unknown directive " + string(d.Kind)
 	}

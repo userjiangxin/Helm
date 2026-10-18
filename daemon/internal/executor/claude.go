@@ -120,7 +120,7 @@ func (c *Claude) Start(ctx context.Context, spec RunSpec) (SessionID, error) {
 	if err := cmd.Start(); err != nil {
 		return "", fmt.Errorf("start claude: %w", err)
 	}
-	sid := SessionID(spec.RunID)
+	sid := SessionFor(spec)
 	p := &claudeProc{cmd: cmd, stdin: stdin, sessionID: nativeID, done: make(chan struct{})}
 	c.mu.Lock()
 	c.procs[sid] = p

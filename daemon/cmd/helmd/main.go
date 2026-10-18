@@ -28,6 +28,7 @@ import (
 	"github.com/helm/helm/daemon/internal/hook"
 	"github.com/helm/helm/daemon/internal/registry"
 	"github.com/helm/helm/daemon/internal/supervisor"
+	"github.com/helm/helm/daemon/internal/workspace"
 )
 
 var version = "0.1.0-dev"
@@ -111,12 +112,12 @@ func cmdRun(args []string) {
 	}
 	client := conn.New(conn.Options{ServerURL: *server, Token: token, Log: log}, spool)
 	sup := supervisor.New(client, supervisor.Options{
-		Executors: []executor.Executor{executor.NewCodex(lookPath("codex")), executor.NewClaude(lookPath("claude"), selfPath(), filepath.Join(helmHome(), "run"))},
-		MaxRuns:   *maxRuns,
-		WorkRoot:  filepath.Join(helmHome(), "work"),
-		HookSock:  defaultSock(),
-		Log:       log,
-		Load:      registry.NewLoadSampler(),
+		Executors:  []executor.Executor{executor.NewCodex(lookPath("codex")), executor.NewClaude(lookPath("claude"), selfPath(), filepath.Join(helmHome(), "run"))},
+		MaxRuns:    *maxRuns,
+		HookSock:   defaultSock(),
+		Log:        log,
+		Load:       registry.NewLoadSampler(),
+		Workspaces: workspace.New(helmHome()),
 	})
 
 	hs, err := hook.Listen(defaultSock(), sup)

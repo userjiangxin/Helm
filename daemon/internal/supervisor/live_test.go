@@ -13,6 +13,7 @@ import (
 	"github.com/helm/helm/daemon/internal/executor"
 	"github.com/helm/helm/daemon/internal/hook"
 	"github.com/helm/helm/daemon/internal/wire"
+	"github.com/helm/helm/daemon/internal/workspace"
 )
 
 // TestLiveClaudeLoop drives the real Claude Code CLI through the real helmd hook:
@@ -115,4 +116,83 @@ func dump(f *fakeCtl) string {
 		out += fmt.Sprintf("%3d %-14s %s\n", e.Seq, e.Type, d)
 	}
 	return out
+}
+
+// TestLiveClaudeRollback: real Claude Code in a git worktree; ROLLBACK discards its work and
+// restarts the agent with the reviewer's note. Opt in with HELM_LIVE_CLAUDE=1.
+func TestLiveClaudeRollback(t *testing.T) {
+	if os.Getenv("HELM_LIVE_CLAUDE") != "1" {
+		t.Skip("set HELM_LIVE_CLAUDE=1")
+	}
+	claudeBin, err := exec.LookPath("claude")
+	if err != nil {
+		t.Skip("claude not installed")
+	}
+	tmp := t.TempDir()
+	helmd := filepath.Join(tmp, "helmd")
+	if out, err := exec.Command("go", "build", "-o", helmd, "../../cmd/helmd").CombinedOutput(); err != nil {
+		t.Fatalf("build helmd: %v %s", err, out)
+	}
+	origin := filepath.Join(tmp, "origin")
+	_ = os.MkdirAll(origin, 0o755)
+	for _, args := range [][]string{{"init", "-q", "-b", "main"}, {"commit", "-q", "--allow-empty", "-m", "init"}} {
+		cmd := exec.Command("git", args...)
+		cmd.Dir = origin
+		cmd.Env = append(os.Environ(), "GIT_AUTHOR_NAME=t", "GIT_AUTHOR_EMAIL=t@t", "GIT_COMMITTER_NAME=t", "GIT_COMMITTER_EMAIL=t@t")
+		if out, err := cmd.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v %s", args, err, out)
+		}
+	}
+	sock := filepath.Join(tmp, "h.sock")
+	ctl := &fakeCtl{queue: []wire.RunAssignment{{RunID: "run_rb", Epoch: 1, Executor: "claude", Contract: wire.Contract{
+		Version: 1, Repo: origin, BaseRef: "main", Intent: "Create a file",
+		Prompt: "Use the Write tool to create first.txt in the current directory containing the word one. Then stop and report.",
+		Scope:  wire.Scope{WritePaths: []string{}},
+	}}}}
+	s := New(ctl, Options{Executors: []executor.Executor{executor.NewClaude(claudeBin, helmd, filepath.Join(tmp, "state"))},
+		MaxRuns: 1, HookSock: sock, Workspaces: workspace.New(filepath.Join(tmp, "home"))})
+	hs, err := hook.Listen(sock, s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer hs.Close()
+	ctx := context.Background()
+	s.OnWake(ctx, "test")
+
+	waitFor := func(what string, cond func() bool, d time.Duration) {
+		t.Helper()
+		end := time.Now().Add(d)
+		for time.Now().Before(end) {
+			if cond() {
+				return
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		t.Fatalf("timeout waiting for %s\n%s", what, dump(ctl))
+	}
+	work := filepath.Join(tmp, "home", "work", "run_rb")
+	waitFor("first VERIFYING", func() bool { return ctl.lastState() == wire.RunVerifying }, 3*time.Minute)
+	if _, err := os.Stat(filepath.Join(work, "first.txt")); err != nil {
+		t.Fatalf("first.txt should exist in the worktree: %v", err)
+	}
+
+	msg, _ := json.Marshal(map[string]string{"message": "Wrong name. Create second.txt containing the word two instead, then stop."})
+	ctl.mu.Lock()
+	ctl.dirs = []wire.Directive{{ID: "d1", RunID: "run_rb", Kind: wire.DirRollback, ContractVersion: 1, Args: msg}}
+	ctl.mu.Unlock()
+	s.OnWake(ctx, "test")
+	if a := ctl.acks[len(ctl.acks)-1]; a.Status != wire.AckApplied {
+		t.Fatalf("rollback ack: %+v", a)
+	}
+	if _, err := os.Stat(filepath.Join(work, "first.txt")); !os.IsNotExist(err) {
+		t.Fatal("rollback must remove first.txt")
+	}
+	waitFor("second VERIFYING", func() bool {
+		_, err := os.Stat(filepath.Join(work, "second.txt"))
+		return ctl.lastState() == wire.RunVerifying && err == nil
+	}, 3*time.Minute)
+	if _, err := os.Stat(filepath.Join(work, "first.txt")); !os.IsNotExist(err) {
+		t.Fatal("first.txt reappeared")
+	}
+	t.Logf("events:\n%s", dump(ctl))
 }
