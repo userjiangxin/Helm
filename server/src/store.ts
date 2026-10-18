@@ -8,6 +8,8 @@ import { TERMINAL_STATES } from "./protocol.js";
 
 export interface Sql {
   query<T = Record<string, unknown>>(text: string, params?: unknown[]): Promise<T[]>;
+  /** Runs a multi-statement script without parameters (migrations). */
+  exec(script: string): Promise<void>;
   tx<T>(fn: (sql: Sql) => Promise<T>): Promise<T>;
 }
 

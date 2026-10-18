@@ -1,16 +1,12 @@
-// helm-server entrypoint: Postgres via postgres.js, LISTEN/NOTIFY fan-out.
-import postgres from "postgres";
+// helm-server entrypoint. Applies pending migrations, then serves.
+import { migrate } from "./migrate.js";
+import { connect } from "./pg.js";
 import { startServer } from "./server.js";
-import type { Sql } from "./store.js";
 
-const pg = postgres(process.env.DATABASE_URL ?? "postgres://helm:helm@localhost:5432/helm", { max: 10 });
-const wrap = (q: postgres.Sql | postgres.TransactionSql): Sql => ({
-  query: (text, params = []) => q.unsafe(text, params as never[]) as never,
-  tx: (fn) => (q as postgres.Sql).begin((tx) => fn(wrap(tx))) as never,
-});
-
+const { pg, sql } = connect();
+await migrate(sql, undefined, console.log);
 const { port } = await startServer({
-  sql: wrap(pg),
+  sql,
   listen: (cb) => pg.listen("helm", cb),
   port: Number(process.env.PORT ?? 8080),
   // Bind to localhost and expose with `tailscale serve`, or set HOST to the tailnet IP.

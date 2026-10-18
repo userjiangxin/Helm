@@ -9,6 +9,5 @@ services:
     ports: ["127.0.0.1:5432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./db/migrations:/docker-entrypoint-initdb.d:ro   # first boot only; use `pnpm migrate` (S1) afterwards
 volumes:
   pgdata:
