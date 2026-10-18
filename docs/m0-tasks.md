@@ -26,7 +26,7 @@
 | ~~D1~~ ✅ | `helmd register --server --code`：换取机器 token 存入 `~/.helm/credentials`（0600）；`helmd run` 默认读取；附 systemd unit、launchd plist 和一行安装脚本 | 新机器从零到在线只需两条命令；token 不出现在进程参数里 | Sonnet |
 | D2 | Run 工作区：每个 repo 一个共享 bare clone（`~/.helm/repos`），每个 Run 一个 git worktree；启动前打快照提交供 ROLLBACK 使用；按 `contract.skills` 链接 skill 目录；完成后按 TTL 清理 | 并发两个 Run 互不干扰；测试覆盖 worktree 创建、快照、清理 | Sonnet |
 | D3 | 文件持久化的 spool（每个 Run 一个追加写的 JSONL）；服务端回传每个 Run 已持久化的最大 seq，daemon 据此删除 | kill -9 重启 daemon 后事件不丢、不重复 | Sonnet |
-| D4 | Codex 执行器：`codex app-server`（stdio JSON-RPC）。先用 `generate-json-schema` 导出协议类型；实现 initialize、thread/start、turn/start、通知归一化、审批请求接入策略引擎、turn/interrupt、thread/resume | 一个真实的 Codex Run 能跑完；越界写入被拦截并让 Run 进入 GATED；STEER 能在下一轮生效 | **Opus** |
+| ~~D4~~ ⚠️ | Codex 执行器：`codex app-server`（stdio JSON-RPC）。先用 `generate-json-schema` 导出协议类型；实现 initialize、thread/start、turn/start、通知归一化、审批请求接入策略引擎、turn/interrupt、thread/resume | 一个真实的 Codex Run 能跑完；越界写入被拦截并让 Run 进入 GATED；STEER 能在下一轮生效 | **Opus** |
 | ~~D5~~ ✅ | Claude 执行器：`claude -p` 的 stream-json 输入输出模式，按 Run 生成 settings 文件注册 `helmd hook pre-tool-use`；实现消息注入、中断、`--resume`；动手前先核对已安装版本的 `claude --help` | 一个真实的 Claude Code Run 能跑完；hook 拦截生效；PAUSE 后下一次工具调用被拒绝 | **Opus** |
 | D6 | 心跳负载采样：CPU（读 /proc 或 gopsutil）、`nvidia-smi` 的利用率与显存 | 看板“机器”页能看到每张卡的占用 | Sonnet |
 | D7 | 事件归一化工具：报错签名（去掉数字、路径、地址后哈希，按签名计数）、L0 证据落盘（`~/.helm/evidence/<run>/`）并上报 `evidence` 事件 | 同一报错重复出现只产生一个签名且 count 递增 | Sonnet |
@@ -58,6 +58,21 @@
 | ID | 任务 | 完成标准 |
 | --- | --- | --- |
 | E1 | M0 验收演示：本机跑 Claude Code、云主机或 GPU 机跑 Codex，各派一个任务；在看板上对其中一个 PAUSE → STEER → CONTINUE，对另一个 ABORT | 录屏留档；把遇到的问题记入 M1 |
+
+## D4 Codex 执行器：需要你在有 Codex 账号的机器上验证一次
+
+已验证的部分（codex-cli 0.163.0，无 OpenAI 账号）：initialize、thread/start、turn/start（含沙箱策略）均被 app-server 接受；审批请求、文件改动、命令结果、轮次结束的处理用模拟 app-server 测过。
+
+没验证的部分：真实模型跑一轮时的完整事件流，特别是写入范围外文件时 Codex 是否按预期发来 `item/fileChange/requestApproval`。
+
+验证步骤（在已 `codex login` 的机器上）：
+
+```bash
+cd daemon
+HELM_LIVE_CODEX=1 go test ./internal/executor -run TestCodexLive -v     # 一轮简单对话，应以 claim(done) 结束
+```
+
+然后在看板上建一个执行器选 Codex 的任务，让它往工作目录外写文件，确认出现“等你拍板”。如果审批没有触发，把 `helmd` 日志和 Codex 版本发给接手的 agent：可能需要把 `approvalPolicy` 从 `untrusted` 调整为 granular 配置。
 
 ## 实现中顺带完成
 

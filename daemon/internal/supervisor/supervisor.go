@@ -199,7 +199,9 @@ func (s *Supervisor) start(ctx context.Context, a wire.RunAssignment) {
 	workdir := a.Contract.Workdir
 	r.engine = policy.New(workdir, a.Contract.Scope)
 
-	sess, err := ex.Start(ctx, executor.RunSpec{RunID: a.RunID, Workdir: workdir, Contract: a.Contract, HookSock: s.hookSock})
+	runID := a.RunID
+	sess, err := ex.Start(ctx, executor.RunSpec{RunID: a.RunID, Workdir: workdir, Contract: a.Contract, HookSock: s.hookSock,
+		Decide: func(req policy.Request) policy.Decision { return s.Decide(runID, req) }})
 	if err != nil {
 		s.transition(ctx, r, wire.RunFailed, err.Error())
 		s.forget(a.RunID)
@@ -300,6 +302,11 @@ func (s *Supervisor) apply(ctx context.Context, d wire.Directive) (wire.AckStatu
 			return wire.AckRejectedInvalid, "AMEND needs args.scope"
 		}
 		r.engine.Apply(*args.Scope)
+		if u, ok := r.exec.(interface {
+			UpdateScope(executor.SessionID, string, wire.Scope)
+		}); ok {
+			u.UpdateScope(r.session, r.a.Contract.Workdir, *args.Scope) // e.g. Codex sandbox writable roots
+		}
 		s.mu.Lock()
 		r.a.Contract.Version = d.ContractVersion
 		r.a.Contract.Scope = *args.Scope
@@ -352,12 +359,15 @@ func (s *Supervisor) apply(ctx context.Context, d wire.Directive) (wire.AckStatu
 
 // send delivers a user message to the agent and records that a new turn is outstanding.
 func (s *Supervisor) send(ctx context.Context, r *run, msg string) error {
-	if err := r.exec.Send(ctx, r.session, msg); err != nil {
+	newTurn, err := r.exec.Send(ctx, r.session, msg)
+	if err != nil {
 		return err
 	}
-	s.mu.Lock()
-	r.turns++
-	s.mu.Unlock()
+	if newTurn {
+		s.mu.Lock()
+		r.turns++
+		s.mu.Unlock()
+	}
 	return nil
 }
 

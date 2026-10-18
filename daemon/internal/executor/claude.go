@@ -140,7 +140,7 @@ func (c *Claude) Start(ctx context.Context, spec RunSpec) (SessionID, error) {
 	}()
 
 	if spec.ResumeRef == "" {
-		if err := c.Send(ctx, sid, InitialPrompt(spec.Contract)); err != nil {
+		if _, err := c.Send(ctx, sid, InitialPrompt(spec.Contract)); err != nil {
 			_ = c.Stop(ctx, sid, time.Second)
 			return "", err
 		}
@@ -170,12 +170,13 @@ func (c *Claude) writeLine(s SessionID, v any) error {
 	return err
 }
 
-// Send queues a user message; Claude Code processes it as the next turn.
-func (c *Claude) Send(_ context.Context, s SessionID, msg string) error {
-	return c.writeLine(s, map[string]any{
+// Send queues a user message; Claude Code processes it as its own next turn.
+func (c *Claude) Send(_ context.Context, s SessionID, msg string) (bool, error) {
+	err := c.writeLine(s, map[string]any{
 		"type":    "user",
 		"message": map[string]any{"role": "user", "content": msg},
 	})
+	return err == nil, err
 }
 
 // Interrupt cancels the current turn via the stream-json control channel.

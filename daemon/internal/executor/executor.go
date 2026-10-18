@@ -7,6 +7,7 @@ import (
 	"context"
 	"time"
 
+	"github.com/helm/helm/daemon/internal/policy"
 	"github.com/helm/helm/daemon/internal/wire"
 )
 
@@ -14,10 +15,12 @@ type SessionID string
 
 // RunSpec is everything an executor needs to start one Run.
 type RunSpec struct {
-	RunID     string
-	Workdir   string // prepared git worktree or contract workdir
-	Contract  wire.Contract
-	HookSock  string   // unix socket of the policy engine (claude executor wires it into PreToolUse)
+	RunID    string
+	Workdir  string // prepared git worktree or contract workdir
+	Contract wire.Contract
+	HookSock string // unix socket of the policy engine (claude executor wires it into PreToolUse)
+	// Decide is the in-process policy check (codex executor answers app-server approval requests with it).
+	Decide    func(policy.Request) policy.Decision
 	SkillDirs []string // skill folders to expose to the agent for this run only
 	ResumeRef string   // agent-native session id to resume (ROLLBACK starts fresh instead)
 	Env       []string
@@ -33,8 +36,10 @@ type Event struct {
 type Executor interface {
 	Name() string
 	Start(ctx context.Context, spec RunSpec) (SessionID, error)
-	// Send injects a message on the agent's next turn (STEER, AMEND explanations, CONTINUE notes).
-	Send(ctx context.Context, s SessionID, msg string) error
+	// Send delivers a user message (STEER, AMEND explanations, CONTINUE notes). newTurn reports
+	// whether it will produce its own turn result (Claude queues a new turn; Codex merges the
+	// message into a turn that is still running). The supervisor counts outstanding turns with it.
+	Send(ctx context.Context, s SessionID, msg string) (newTurn bool, err error)
 	// Interrupt cancels the current turn but keeps the session.
 	Interrupt(ctx context.Context, s SessionID) error
 	// Stop ends the session; after grace the process group is killed.

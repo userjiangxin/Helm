@@ -71,11 +71,11 @@ func (e *fakeExec) Name() string { return "codex" }
 func (e *fakeExec) Start(context.Context, executor.RunSpec) (executor.SessionID, error) {
 	return "s1", nil
 }
-func (e *fakeExec) Send(_ context.Context, _ executor.SessionID, m string) error {
+func (e *fakeExec) Send(_ context.Context, _ executor.SessionID, m string) (bool, error) {
 	e.mu.Lock()
 	e.sent = append(e.sent, m)
 	e.mu.Unlock()
-	return nil
+	return true, nil
 }
 func (e *fakeExec) Interrupt(context.Context, executor.SessionID) error           { return nil }
 func (e *fakeExec) Stop(context.Context, executor.SessionID, time.Duration) error { return nil }

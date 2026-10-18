@@ -106,7 +106,7 @@ func cmdRun(args []string) {
 
 	client := conn.New(conn.Options{ServerURL: *server, Token: token, Log: log}, &conn.MemSpool{})
 	sup := supervisor.New(client, supervisor.Options{
-		Executors: []executor.Executor{executor.NewCodex(), executor.NewClaude(lookPath("claude"), selfPath(), filepath.Join(helmHome(), "run"))},
+		Executors: []executor.Executor{executor.NewCodex(lookPath("codex")), executor.NewClaude(lookPath("claude"), selfPath(), filepath.Join(helmHome(), "run"))},
 		MaxRuns:   *maxRuns,
 		WorkRoot:  filepath.Join(helmHome(), "work"),
 		HookSock:  defaultSock(),

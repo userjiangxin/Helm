@@ -96,7 +96,7 @@ func TestClaudeProcessPlumbing(t *testing.T) {
 			claims++
 		}
 	}
-	if err := c.Send(ctx, sid, "please continue"); err != nil {
+	if _, err := c.Send(ctx, sid, "please continue"); err != nil {
 		t.Fatal(err)
 	}
 	for claims < 2 {
