@@ -1,5 +1,6 @@
 // End to end: real helmd binary <-> real server (on PGlite). Skipped when Go is unavailable.
-import { execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
+import { promisify } from "node:util";
 import { mkdtempSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -40,14 +41,17 @@ afterAll(() => {
 });
 
 it.skipIf(!hasGo)("helmd registers, heartbeats, wakes on dispatch, claims and reports state", async () => {
-  const { token, machineId } = await S.registerMachine(sql, await S.createRegistrationCode(sql), "e2e-box");
-  helmd = spawn(bin, ["run", "--server", `http://127.0.0.1:${srv.port}`, "--token", token, "--max-runs", "2"], {
-    env: { ...process.env, HELM_HOME: join(tmp, "home"), PATH: `${join(tmp, "fakebin")}:${process.env.PATH}` },
-  });
+  // Real registration flow: one-time code -> `helmd register` -> credentials file -> `helmd run`.
+  const env = { ...process.env, HELM_HOME: join(tmp, "home"), HELM_TOKEN: "" };
+  const code = await S.createRegistrationCode(sql);
+  // async: the server under test lives in this same Node process
+  await promisify(execFile)(bin, ["register", "--server", `http://127.0.0.1:${srv.port}`, "--code", code, "--name", "e2e-box"], { env });
+  const [{ id: machineId }] = await sql.query<{ id: string }>(`SELECT id FROM machine WHERE name = 'e2e-box'`) as [{ id: string }];
+  helmd = spawn(bin, ["run", "--max-runs", "2", "--labels", "e2e"], { env });
   helmd.stderr?.on("data", (d) => (logs += d));
 
   // 1. capabilities + heartbeat reach the database
-  await waitFor(async () => (await sql.query(`SELECT 1 FROM machine WHERE id=$1 AND last_heartbeat IS NOT NULL`, [machineId]))[0]);
+  await waitFor(async () => (await sql.query(`SELECT 1 FROM machine WHERE id=$1 AND last_heartbeat IS NOT NULL AND 'e2e' = ANY(labels)`, [machineId]))[0]);
 
   // Pretend the box has codex so the claim filter matches (the codex executor itself is still a stub in M0).
   await sql.query(`UPDATE machine SET capabilities = jsonb_set(capabilities, '{agents}', '[{"name":"codex","path":"/x","version":"1"}]') WHERE id=$1`, [machineId]);

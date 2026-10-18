@@ -1,5 +1,7 @@
 // helmd is Helm's per-machine daemon ("the hand").
 //
+//	helmd register --server <url> --code <code> [--name <machine>]
+//	                              exchange a one-time code for a machine token (~/.helm/credentials)
 //	helmd run                     start the daemon (foreground; use systemd/launchd for background)
 //	helmd caps                    print detected capabilities as JSON
 //	helmd hook pre-tool-use --run <id> [--sock <path>]
@@ -16,9 +18,11 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 
 	"github.com/helm/helm/daemon/internal/conn"
+	"github.com/helm/helm/daemon/internal/creds"
 	"github.com/helm/helm/daemon/internal/executor"
 	"github.com/helm/helm/daemon/internal/hook"
 	"github.com/helm/helm/daemon/internal/registry"
@@ -42,6 +46,8 @@ func main() {
 		usage()
 	}
 	switch os.Args[1] {
+	case "register":
+		cmdRegister(os.Args[2:])
 	case "run":
 		cmdRun(os.Args[2:])
 	case "caps":
@@ -59,26 +65,45 @@ func main() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: helmd run | caps | hook pre-tool-use --run <id> | version")
+	fmt.Fprintln(os.Stderr, "usage: helmd register --server <url> --code <code> | run | caps | hook pre-tool-use --run <id> | version")
 	os.Exit(2)
 }
 
 func cmdRun(args []string) {
 	fs := flag.NewFlagSet("run", flag.ExitOnError)
-	server := fs.String("server", os.Getenv("HELM_SERVER"), "control plane URL")
-	token := fs.String("token", os.Getenv("HELM_TOKEN"), "machine token (TODO(M0-D1): read from ~/.helm/credentials)")
+	server := fs.String("server", os.Getenv("HELM_SERVER"), "control plane URL (default: from credentials)")
 	maxRuns := fs.Int("max-runs", 4, "max concurrent runs")
+	labels := fs.String("labels", os.Getenv("HELM_LABELS"), "comma-separated machine labels, e.g. gpu,dingtalk")
 	_ = fs.Parse(args)
-	if *server == "" || *token == "" {
-		fmt.Fprintln(os.Stderr, "helmd run: --server and --token are required")
+	// The token is read from the credentials file (or HELM_TOKEN for tests), never from argv.
+	token := os.Getenv("HELM_TOKEN")
+	if c, err := creds.Load(helmHome()); err == nil {
+		if *server == "" {
+			*server = c.Server
+		}
+		if token == "" {
+			token = c.Token
+		}
+	} else if token == "" {
+		fmt.Fprintln(os.Stderr, "helmd run: not registered:", err, "\nrun: helmd register --server <url> --code <code>")
 		os.Exit(2)
+	}
+	if *server == "" {
+		fmt.Fprintln(os.Stderr, "helmd run: no server URL")
+		os.Exit(2)
+	}
+	var labelList []string
+	for _, l := range strings.Split(*labels, ",") {
+		if l = strings.TrimSpace(l); l != "" {
+			labelList = append(labelList, l)
+		}
 	}
 
 	log := slog.New(slog.NewJSONHandler(os.Stderr, nil))
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	client := conn.New(conn.Options{ServerURL: *server, Token: *token, Log: log}, &conn.MemSpool{})
+	client := conn.New(conn.Options{ServerURL: *server, Token: token, Log: log}, &conn.MemSpool{})
 	sup := supervisor.New(client, supervisor.Options{
 		Executors: []executor.Executor{executor.NewCodex(), executor.NewClaude()},
 		MaxRuns:   *maxRuns,
@@ -94,11 +119,34 @@ func cmdRun(args []string) {
 	}
 	defer hs.Close()
 
-	if err := client.PutCapabilities(ctx, registry.Detect(ctx, version, nil, *maxRuns)); err != nil {
+	if err := client.PutCapabilities(ctx, registry.Detect(ctx, version, labelList, *maxRuns)); err != nil {
 		log.Warn("capabilities not reported yet; will retry on reconnect", "err", err)
 	}
 	log.Info("helmd started", "version", version, "server", *server)
 	client.Run(ctx, sup)
+}
+
+func cmdRegister(args []string) {
+	fs := flag.NewFlagSet("register", flag.ExitOnError)
+	server := fs.String("server", "", "control plane URL, e.g. https://helm.<tailnet>.ts.net")
+	code := fs.String("code", "", "one-time registration code from the board (机器 → 生成注册码)")
+	host, _ := os.Hostname()
+	name := fs.String("name", host, "machine name shown on the board")
+	_ = fs.Parse(args)
+	if *server == "" || *code == "" {
+		fmt.Fprintln(os.Stderr, "helmd register: --server and --code are required")
+		os.Exit(2)
+	}
+	c, err := creds.Register(context.Background(), *server, *code, *name)
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	if err := creds.Save(helmHome(), c); err != nil {
+		fmt.Fprintln(os.Stderr, "save credentials:", err)
+		os.Exit(1)
+	}
+	fmt.Printf("registered %s as %s; credentials saved to %s\n", *name, c.MachineID, creds.Path(helmHome()))
 }
 
 func cmdHook(args []string) {

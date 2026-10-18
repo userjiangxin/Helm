@@ -1,0 +1,19 @@
+# User service: install with deploy/install.sh, or manually:
+#   cp helmd.service ~/.config/systemd/user/ && systemctl --user daemon-reload && systemctl --user enable --now helmd
+#   loginctl enable-linger $USER   # keep running after logout (needed on GPU boxes you SSH into)
+[Unit]
+Description=Helm daemon (helmd)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+ExecStart=%h/.local/bin/helmd run
+EnvironmentFile=-%h/.helm/env
+Restart=always
+RestartSec=5
+# Runs launched by helmd use their own systemd-run scopes (M1 Job executor), so a helmd
+# restart does not kill long training jobs.
+KillMode=process
+
+[Install]
+WantedBy=default.target
