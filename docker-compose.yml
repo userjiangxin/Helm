@@ -1,4 +1,6 @@
-# Development stack. Production notes: docs/m0-tasks.md task S4.
+# Production-ish stack: Postgres + helm-server (API + board). Publish it on your tailnet with
+#   tailscale serve --bg 8080
+# and set HELM_ALLOWED_USERS to your Tailscale login. See docs/deploy.md.
 services:
   postgres:
     image: pgvector/pgvector:pg17
@@ -6,8 +8,25 @@ services:
       POSTGRES_USER: helm
       POSTGRES_PASSWORD: helm
       POSTGRES_DB: helm
-    ports: ["127.0.0.1:5432:5432"]
     volumes:
       - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U helm"]
+      interval: 5s
+      retries: 10
+    restart: unless-stopped
+
+  server:
+    build: .
+    depends_on:
+      postgres: { condition: service_healthy }
+    environment:
+      DATABASE_URL: postgres://helm:helm@postgres:5432/helm
+      HELM_ALLOWED_USERS: ${HELM_ALLOWED_USERS:-}
+      HELM_BOARD_PASSWORD: ${HELM_BOARD_PASSWORD:-}
+    ports:
+      - "127.0.0.1:8080:8080"   # only via tailscale serve / localhost
+    restart: unless-stopped
+
 volumes:
   pgdata:

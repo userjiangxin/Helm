@@ -38,8 +38,8 @@
 | ~~S1~~ ✅ | 迁移执行器：`pnpm migrate` 按文件名顺序执行 `db/migrations`，用 `schema_migrations` 表记录 | 重复执行无副作用 | Sonnet |
 | ~~S2~~ ✅ | hold → 审批：收到 `decision=hold` 的 tool_call 事件时创建 approval（附工具调用上下文）；批准接口生成 CONTINUE（或带新 scope 的 AMEND + 新 contract 版本），拒绝接口生成 STEER 或 ABORT | 测试覆盖“越界 → 审批 → 批准 → 新 contract 版本 → AMEND 下发”全链路 | **Opus** |
 | S3 | 看板 API 补全：任务拖拽（status、position）、按任务列出 Run 历史、人工创建新 contract 版本 | 接口都有 PGlite 测试 | Sonnet |
-| S4 | 部署：`docker-compose.yml`（Postgres 17 + pgvector、server、web），以及 `tailscale serve` 的配置说明 | 新机器按文档 15 分钟内跑起来 | Sonnet |
-| S5 | 看板鉴权：信任 `tailscale serve` 注入的身份头，只允许你的 Tailscale 账号；直连时退回单用户口令 | 未经 Tailscale 的请求拿不到 `/api/*` | Sonnet |
+| ~~S4~~ ✅ | 部署：`docker-compose.yml`（Postgres 17 + pgvector、server、web），以及 `tailscale serve` 的配置说明 | 新机器按文档 15 分钟内跑起来 | Sonnet |
+| ~~S5~~ ✅ | 看板鉴权：信任 `tailscale serve` 注入的身份头，只允许你的 Tailscale 账号；直连时退回单用户口令 | 未经 Tailscale 的请求拿不到 `/api/*` | Sonnet |
 
 ### 看板（web）
 

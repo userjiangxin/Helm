@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono } from "hono";
 import { buildApp, Hub } from "./app.js";
+import { authFromEnv, boardAuth, type AuthConfig } from "./auth.js";
 import { sweep, type Sql } from "./store.js";
 
 export interface StartOptions {
@@ -14,12 +15,20 @@ export interface StartOptions {
   port: number;
   host?: string;
   sweepMs?: number;
+  auth?: AuthConfig;
 }
 
 export async function startServer(o: StartOptions): Promise<{ server: ServerType; hub: Hub; port: number; close: () => void }> {
   const hub = new Hub();
   const root = new Hono();
   const { injectWebSocket, upgradeWebSocket } = createNodeWebSocket({ app: root });
+  // Everything except the daemon API (machine tokens) and health check sits behind board auth.
+  const auth = boardAuth(o.auth ?? authFromEnv());
+  root.use("*", async (c, next) => {
+    const p = c.req.path;
+    if (p === "/healthz" || p.startsWith("/daemon/")) return next();
+    return auth(c, next);
+  });
   root.route("/", buildApp(o.sql, hub, upgradeWebSocket));
   // Serve the built board (web/dist) from the same origin when it exists.
   const webDist = join(import.meta.dirname, "../../web/dist");
