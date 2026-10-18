@@ -306,3 +306,26 @@ func TestEvidenceTranscriptIsCreatedAndReported(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestToolUseThatBypassesHookAbortsRun(t *testing.T) {
+	if testing.Short() {
+		t.Skip("waits for the 5s grace period")
+	}
+	ctx := context.Background()
+	ctl := &fakeCtl{queue: []wire.RunAssignment{assignment("r1", 1), assignment("r2", 1)}}
+	ex := &fakeExec{ev: make(chan executor.SessionEvent, 8)}
+	s := New(ctl, Options{Executors: []executor.Executor{ex}, MaxRuns: 2})
+	s.OnWake(ctx, "test")
+	// r1: tool use announced and the hook saw it → fine. r2: tool use never reached the hook → abort.
+	ex.ev <- executor.SessionEvent{Session: "r1#1", ToolUses: 1}
+	s.Decide("r1", policy.Request{Tool: "Bash", Command: "ls"})
+	ex.ev <- executor.SessionEvent{Session: "r2#1", ToolUses: 1}
+	time.Sleep(5500 * time.Millisecond)
+	s.mu.Lock()
+	_, r1 := s.runs["r1"]
+	_, r2 := s.runs["r2"]
+	s.mu.Unlock()
+	if !r1 || r2 {
+		t.Fatalf("r1 must keep running and r2 must be aborted: r1=%v r2=%v", r1, r2)
+	}
+}

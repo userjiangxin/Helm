@@ -83,6 +83,7 @@ HELM_LIVE_CODEX=1 go test ./internal/executor -run TestCodexLive -v     # 一轮
 - 零安装模式：`DATABASE_URL=pglite:<目录>`，以及 `make demo`
 - ROLLBACK 指令与看板“回滚重做”按钮（需要任务使用 Git 仓库）
 - 看板上修改 Contract：生成新版本，如果任务正在执行，用 AMEND 立即下发
+- 拦截自检：Claude 的工具调用如果没有经过 Helm 的 hook（比如被管理员策略禁用了 hooks），5 秒内终止该 Run
 
 ## 推荐顺序
 

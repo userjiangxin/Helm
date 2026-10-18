@@ -241,6 +241,9 @@ func (c *Claude) read(sid SessionID, r io.Reader, raw io.Writer) {
 	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
 	for sc.Scan() {
 		writeRaw(raw, sc.Bytes())
+		if n := ToolUseCount(sc.Bytes()); n > 0 {
+			c.events <- SessionEvent{Session: sid, ToolUses: n}
+		}
 		for _, ev := range NormalizeClaudeLine(sc.Bytes()) {
 			c.events <- SessionEvent{Session: sid, Event: ev}
 		}
@@ -250,6 +253,22 @@ func (c *Claude) read(sid SessionID, r io.Reader, raw io.Writer) {
 // NormalizeClaudeLine maps one stream-json line to zero or more L1 events.
 // Tool calls are not emitted here: the PreToolUse hook already reports every call with its
 // policy decision, which is the more useful record.
+// ToolUseCount reports how many tool_use blocks a stream-json line contains (safety check:
+// every tool use must also pass through the Helm hook).
+func ToolUseCount(line []byte) int {
+	var l ccLine
+	if json.Unmarshal(line, &l) != nil || l.Type != "assistant" {
+		return 0
+	}
+	n := 0
+	for _, b := range blocks(l.Message) {
+		if b.Type == "tool_use" {
+			n++
+		}
+	}
+	return n
+}
+
 func NormalizeClaudeLine(line []byte) []Event {
 	var l ccLine
 	if err := json.Unmarshal(line, &l); err != nil {

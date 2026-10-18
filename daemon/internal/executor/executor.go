@@ -61,6 +61,9 @@ type SessionEvent struct {
 	Event   Event
 	Done    bool  // session ended
 	Err     error // set when Done because of a failure
+	// ToolUses > 0 reports tool calls the agent made (no Event). The supervisor checks they all
+	// passed through the policy hook; if not, enforcement is broken and the run is stopped.
+	ToolUses int
 }
 
 // SessionFor names a session; the supervisor parses the run id back out with RunOf.

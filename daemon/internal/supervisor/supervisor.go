@@ -41,6 +41,8 @@ type run struct {
 	ws      workspace.Workspace
 	attempt int
 	rawLog  *os.File
+
+	toolUses, hookCalls int // Claude safety check: every tool use must have reached the hook
 }
 
 type Supervisor struct {
@@ -104,6 +106,10 @@ func (s *Supervisor) pump(ch <-chan executor.SessionEvent) {
 		if !current {
 			continue // unknown run, or a session replaced by a ROLLBACK restart
 		}
+		if se.ToolUses > 0 {
+			s.checkHooked(ctx, r, se.ToolUses)
+			continue
+		}
 		if se.Done {
 			s.mu.Lock()
 			st := r.state
@@ -139,6 +145,27 @@ func (s *Supervisor) pump(ch <-chan executor.SessionEvent) {
 			}
 		}
 	}
+}
+
+// checkHooked stops a run whose agent used tools that never reached the policy hook — e.g. hooks
+// disabled by a managed Claude Code setting. The hook runs before the tool, and the assistant message
+// that announces the tool_use is streamed before or around it, so allow a short grace period.
+func (s *Supervisor) checkHooked(ctx context.Context, r *run, n int) {
+	s.mu.Lock()
+	r.toolUses += n
+	s.mu.Unlock()
+	time.AfterFunc(5*time.Second, func() {
+		s.mu.Lock()
+		uses, calls, st := r.toolUses, r.hookCalls, r.state
+		s.mu.Unlock()
+		if calls >= uses || isTerminal(st) {
+			return
+		}
+		s.log.Error("tool calls bypassed the Helm hook; stopping run", "run", r.a.RunID, "tool_uses", uses, "hook_calls", calls)
+		s.transition(ctx, r, wire.RunAborted, "policy hook not enforced on this machine (are Claude Code hooks disabled?)")
+		_ = r.exec.Stop(ctx, r.session, 5*time.Second)
+		s.forget(r.a.RunID)
+	})
 }
 
 func isTerminal(st wire.RunState) bool {
@@ -193,6 +220,9 @@ func (s *Supervisor) Decide(runID string, req policy.Request) policy.Decision {
 		return policy.Decision{Action: policy.Deny, Reason: "unknown run " + runID}
 	}
 	d := r.engine.Decide(req)
+	s.mu.Lock()
+	r.hookCalls++
+	s.mu.Unlock()
 	s.emit(context.Background(), r, wire.EvToolCall, wire.ToolCall{
 		Tool: req.Tool, InputDigest: digest(req), Decision: string(d.Action), Reason: d.Reason})
 	if d.Action == policy.Hold {

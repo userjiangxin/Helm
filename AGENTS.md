@@ -54,7 +54,8 @@ Go module fetches: if `sum.golang.org` is unreachable in your sandbox, use `GOPR
 5. **Fail closed.** If helmd is unreachable, the hook denies. If a directive cannot be parsed, reject it with an ack.
 6. **Agent claims are not evidence.** `claim` events (e.g. "done") must be verified by sensors or acceptance scripts before a Run can be SUCCEEDED.
 7. **Contracts are versioned and immutable.** Changing scope = new `contract` row + AMEND directive.
-8. **Protocol changes start in `protocol/`.** Edit README + fixtures first, then Go types, then TS schemas; both test suites must pass.
+8. **Enforcement is verified, not assumed.** helmd counts Claude tool uses against hook calls and aborts a run whose tools bypass the hook (e.g. hooks disabled by managed settings).
+9. **Protocol changes start in `protocol/`.** Edit README + fixtures first, then Go types, then TS schemas; both test suites must pass.
 
 ## Conventions
 
@@ -67,6 +68,6 @@ Go module fetches: if `sum.golang.org` is unreachable in your sandbox, use `GOPR
 
 ## Definition of done for a task
 
-- Tests added for the new behaviour; `make test` passes.
+- Tests added for the new behaviour; `make test` passes **before** committing.
 - `docs/m0-tasks.md` updated (tick the task, note anything deferred).
 - If you touched the protocol, DB schema, or an invariant above, say so explicitly in the PR description.
