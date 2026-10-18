@@ -38,7 +38,8 @@ func (r *recorder) has(reason string) bool {
 
 // Fake control plane: checks auth, sends one wake, records what the daemon sends.
 func TestWakeHeartbeatAndEvents(t *testing.T) {
-	got := make(chan wire.Envelope, 16)
+	ackEvents := true
+	got := make(chan wire.Envelope, 64)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer tok" {
 			http.Error(w, "no", http.StatusUnauthorized)
@@ -59,6 +60,13 @@ func TestWakeHeartbeatAndEvents(t *testing.T) {
 			}
 			var e wire.Envelope
 			_ = json.Unmarshal(data, &e)
+			if e.Type == wire.MsgRunEvents && ackEvents {
+				var b wire.RunEvents
+				_ = json.Unmarshal(e.Payload, &b)
+				p, _ := json.Marshal(wire.EventsAck{RunID: b.RunID, LastSeq: b.Events[len(b.Events)-1].Seq})
+				ack, _ := json.Marshal(wire.Envelope{V: 1, Type: wire.MsgEventsAck, ID: "a", TS: time.Now(), Payload: p})
+				_ = ws.Write(r.Context(), websocket.MessageText, ack)
+			}
 			got <- e
 		}
 	}))
@@ -66,7 +74,8 @@ func TestWakeHeartbeatAndEvents(t *testing.T) {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
-	c := New(Options{ServerURL: srv.URL, Token: "tok", HeartbeatInterval: 50 * time.Millisecond, PollInterval: time.Hour}, &MemSpool{})
+	spool := &MemSpool{}
+	c := New(Options{ServerURL: srv.URL, Token: "tok", HeartbeatInterval: 50 * time.Millisecond, PollInterval: time.Hour}, spool)
 	h := &recorder{}
 
 	// Event published before connecting must be spooled and delivered after connect.
@@ -89,5 +98,53 @@ func TestWakeHeartbeatAndEvents(t *testing.T) {
 	}
 	if !h.has("run_queued") {
 		t.Fatal("wake not delivered to handler")
+	}
+	deadline = time.Now().Add(2 * time.Second)
+	for len(spool.Pending()) > 0 && time.Now().Before(deadline) {
+		time.Sleep(10 * time.Millisecond)
+	}
+	if n := len(spool.Pending()); n != 0 {
+		t.Fatalf("acked events must leave the spool, %d left", n)
+	}
+}
+
+// Without an ack the batch stays spooled and is resent on the resend interval.
+func TestUnackedEventsAreResent(t *testing.T) {
+	sends := make(chan struct{}, 16)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		ws, err := websocket.Accept(w, r, nil)
+		if err != nil {
+			return
+		}
+		defer ws.CloseNow()
+		for {
+			_, data, err := ws.Read(r.Context())
+			if err != nil {
+				return
+			}
+			var e wire.Envelope
+			_ = json.Unmarshal(data, &e)
+			if e.Type == wire.MsgRunEvents {
+				sends <- struct{}{}
+			}
+		}
+	}))
+	defer srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	spool := &MemSpool{}
+	c := New(Options{ServerURL: srv.URL, Token: "t", HeartbeatInterval: time.Hour, PollInterval: time.Hour, ResendInterval: 100 * time.Millisecond}, spool)
+	go c.Run(ctx, &recorder{})
+	time.Sleep(200 * time.Millisecond)
+	c.Publish(ctx, wire.RunEvents{RunID: "r", Events: []wire.Event{{Seq: 1, TS: time.Now(), Type: wire.EvClaim, Data: wire.MustData(wire.Claim{Kind: "done"})}}})
+	for i := 0; i < 3; i++ {
+		select {
+		case <-sends:
+		case <-ctx.Done():
+			t.Fatalf("expected repeated sends, got %d", i)
+		}
+	}
+	if len(spool.Pending()) != 1 {
+		t.Fatal("unacked batch must stay in the spool")
 	}
 }

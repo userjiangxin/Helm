@@ -35,7 +35,14 @@ const (
 	MsgWake      MsgType = "wake"
 	MsgHeartbeat MsgType = "heartbeat"
 	MsgRunEvents MsgType = "run_events"
+	MsgEventsAck MsgType = "events_ack"
 )
+
+// EventsAck tells helmd which events the control plane has persisted.
+type EventsAck struct {
+	RunID   string `json:"run_id"`
+	LastSeq int64  `json:"last_seq"`
+}
 
 type Envelope struct {
 	V       int             `json:"v"`

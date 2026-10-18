@@ -168,6 +168,11 @@ export async function sweep(sql: Sql, offlineAfterSeconds = 60): Promise<string[
  * and a state_change only applies if it is newer than anything seen (seq ordering).
  */
 export async function ingestEvents(sql: Sql, machineId: string, runId: string, events: Event[]): Promise<number> {
+  return (await ingestEventsAck(sql, machineId, runId, events)).inserted;
+}
+
+/** Like ingestEvents, also returning the highest seq now persisted for the run (for events_ack). */
+export async function ingestEventsAck(sql: Sql, machineId: string, runId: string, events: Event[]): Promise<{ inserted: number; lastSeq: number }> {
   return sql.tx(async (tx) => {
     const [run] = await tx.query<{ machine_id: string | null; last_seq: string | number }>(
       `SELECT machine_id, last_seq FROM run WHERE id = $1 FOR UPDATE`, [runId]);
@@ -209,7 +214,7 @@ export async function ingestEvents(sql: Sql, machineId: string, runId: string, e
       lastSeq = Math.max(lastSeq, e.seq);
     }
     await tx.query(`UPDATE run SET last_seq = $2 WHERE id = $1`, [runId, lastSeq]);
-    return inserted;
+    return { inserted, lastSeq };
   });
 }
 

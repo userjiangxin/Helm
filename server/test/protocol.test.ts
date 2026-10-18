@@ -20,6 +20,7 @@ describe("protocol fixtures (shared with Go)", () => {
     ["ws_wake.json", P.Wake],
     ["ws_heartbeat.json", P.Heartbeat],
     ["ws_run_events.json", P.RunEvents],
+    ["ws_events_ack.json", P.EventsAck],
   ] as const)("%s envelope + payload", (name, payload) => {
     const env = P.Envelope.parse(fx(name));
     expect(payload.parse(env.payload)).toEqual(env.payload);

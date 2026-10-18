@@ -1,7 +1,7 @@
 // End to end: real helmd binary <-> real server (on PGlite). Skipped when Go is unavailable.
 import { execFile, execFileSync, spawn, type ChildProcess } from "node:child_process";
 import { promisify } from "node:util";
-import { mkdtempSync } from "node:fs";
+import { mkdtempSync, readdirSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, beforeAll, expect, it } from "vitest";
@@ -74,4 +74,7 @@ it.skipIf(!hasGo)("helmd registers, heartbeats, wakes on dispatch, claims and re
 
   const events = await sql.query<{ type: string; data: { to: string } }>(`SELECT type, data FROM run_event WHERE run_id=$1 ORDER BY seq`, [runId]);
   expect(events.map((e) => e.data.to)).toEqual(["PREPARING", "FAILED"]);
+
+  // 3. events_ack: once persisted, the daemon's on-disk spool is emptied.
+  await waitFor(async () => readdirSync(join(tmp, "home", "spool")).length === 0);
 }, 60_000);

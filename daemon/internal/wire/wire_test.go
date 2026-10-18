@@ -44,6 +44,7 @@ func TestFixtures(t *testing.T) {
 	roundTrip(t, "ws_wake.json", &Envelope{})
 	roundTrip(t, "ws_heartbeat.json", &Envelope{})
 	roundTrip(t, "ws_run_events.json", &Envelope{})
+	roundTrip(t, "ws_events_ack.json", &Envelope{})
 }
 
 func TestEnvelopePayloads(t *testing.T) {
@@ -51,6 +52,7 @@ func TestEnvelopePayloads(t *testing.T) {
 		"ws_wake.json":       &Wake{},
 		"ws_heartbeat.json":  &Heartbeat{},
 		"ws_run_events.json": &RunEvents{},
+		"ws_events_ack.json": &EventsAck{},
 	}
 	for name, payload := range cases {
 		raw, _ := os.ReadFile(filepath.Join(fixtures, name))

@@ -104,7 +104,12 @@ func cmdRun(args []string) {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 
-	client := conn.New(conn.Options{ServerURL: *server, Token: token, Log: log}, &conn.MemSpool{})
+	spool, err := conn.NewFileSpool(filepath.Join(helmHome(), "spool"))
+	if err != nil {
+		log.Error("event spool", "err", err)
+		os.Exit(1)
+	}
+	client := conn.New(conn.Options{ServerURL: *server, Token: token, Log: log}, spool)
 	sup := supervisor.New(client, supervisor.Options{
 		Executors: []executor.Executor{executor.NewCodex(lookPath("codex")), executor.NewClaude(lookPath("claude"), selfPath(), filepath.Join(helmHome(), "run"))},
 		MaxRuns:   *maxRuns,

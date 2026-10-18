@@ -11,8 +11,9 @@
 ## 设计原则
 
 1. **WebSocket 只负责提醒，真相在数据库。** 服务端通过 WS 推 `wake`；helmd 收到后走 HTTP 认领 Run、拉取指令。WS 断了也不丢活，30 秒轮询兜底。
-2. **所有写操作幂等。** 认领带 `epoch`；指令带 `contract_version`；事件带单调递增的 `seq`。重复投递只会被去重，不会产生副作用。
-3. **版本落后的指令一律拒绝。** helmd 执行指令前比较 `contract_version`，落后则 ack 为 `rejected_stale`。
+2. **事件至少送达一次。** helmd 先把事件写入本地磁盘缓存，收到 `events_ack` 才删除；重连、超时未确认、helmd 重启后都会补发。重复事件由服务端按 `(run_id, seq)` 去重。
+3. **所有写操作幂等。** 认领带 `epoch`；指令带 `contract_version`；事件带单调递增的 `seq`。重复投递只会被去重，不会产生副作用。
+4. **版本落后的指令一律拒绝。** helmd 执行指令前比较 `contract_version`，落后则 ack 为 `rejected_stale`。
 
 ## 连接与认证
 
@@ -45,6 +46,7 @@
 | server → helmd | `wake` | `{ "reason": "run_queued" \| "directive_queued" \| "skills_updated" }` |
 | helmd → server | `heartbeat` | `{ "running_runs": ["run_id"], "load": {...} }` |
 | helmd → server | `run_events` | `{ "run_id", "events": [Event] }`，events 按 seq 递增 |
+| server → helmd | `events_ack` | `{ "run_id", "last_seq" }`：该 Run 已持久化到的最大 seq。helmd 收到后才删除本地缓存的事件 |
 
 ## Run 状态
 

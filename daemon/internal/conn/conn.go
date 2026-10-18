@@ -29,6 +29,7 @@ type Options struct {
 	Token             string // machine token
 	HeartbeatInterval time.Duration
 	PollInterval      time.Duration
+	ResendInterval    time.Duration // resend unacknowledged events (default 30s)
 	Log               *slog.Logger
 }
 
@@ -56,6 +57,9 @@ func New(opt Options, spool Spool) *Client {
 	}
 	if opt.PollInterval == 0 {
 		opt.PollInterval = 30 * time.Second
+	}
+	if opt.ResendInterval == 0 {
+		opt.ResendInterval = 30 * time.Second
 	}
 	if opt.Log == nil {
 		opt.Log = slog.Default()
@@ -123,13 +127,25 @@ func (c *Client) Ack(ctx context.Context, a wire.DirectiveAck) error {
 
 // ---------- events (push, spooled) ----------
 
-// Publish queues events for a run; they are sent now if connected, else on reconnect.
+// Publish stores events durably, then sends them if connected. They are deleted from the spool
+// only when the control plane acknowledges them (events_ack); until then they are resent on
+// reconnect and every ResendInterval. Duplicates are harmless: the server dedupes on (run_id, seq).
 func (c *Client) Publish(ctx context.Context, batch wire.RunEvents) {
-	c.spool.Put(batch)
-	c.flush(ctx)
+	if err := c.spool.Put(batch); err != nil {
+		c.opt.Log.Error("spool write failed; sending without durability", "err", err)
+	}
+	c.mu.Lock()
+	ws := c.ws
+	c.mu.Unlock()
+	if ws != nil {
+		if err := c.send(ctx, ws, wire.MsgRunEvents, batch); err != nil {
+			c.opt.Log.Warn("event send failed; will resend", "err", err)
+		}
+	}
 }
 
-func (c *Client) flush(ctx context.Context) {
+// resendPending sends every unacknowledged batch (on connect and periodically).
+func (c *Client) resendPending(ctx context.Context) {
 	c.mu.Lock()
 	ws := c.ws
 	c.mu.Unlock()
@@ -138,11 +154,9 @@ func (c *Client) flush(ctx context.Context) {
 	}
 	for _, b := range c.spool.Pending() {
 		if err := c.send(ctx, ws, wire.MsgRunEvents, b); err != nil {
-			c.opt.Log.Warn("event flush failed; will retry", "err", err)
+			c.opt.Log.Warn("event resend failed; will retry", "err", err)
 			return
 		}
-		// TODO(M0-D3): delete only after the server acks the highest seq per run.
-		c.spool.Done(b.RunID, b.Events[len(b.Events)-1].Seq)
 	}
 }
 
@@ -197,11 +211,23 @@ func (c *Client) session(ctx context.Context, h Handler) error {
 	defer func() { c.mu.Lock(); c.ws = nil; c.mu.Unlock() }()
 
 	c.opt.Log.Info("connected to control plane", "url", wsURL)
-	c.flush(ctx)
+	go c.resendPending(ctx)
 	go h.OnWake(ctx, "reconnected")
 
 	sctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	go func() {
+		t := time.NewTicker(c.opt.ResendInterval)
+		defer t.Stop()
+		for {
+			select {
+			case <-sctx.Done():
+				return
+			case <-t.C:
+				c.resendPending(sctx)
+			}
+		}
+	}()
 	go func() {
 		t := time.NewTicker(c.opt.HeartbeatInterval)
 		defer t.Stop()
@@ -228,10 +254,16 @@ func (c *Client) session(ctx context.Context, h Handler) error {
 			c.opt.Log.Warn("ignoring malformed message")
 			continue
 		}
-		if env.Type == wire.MsgWake {
+		switch env.Type {
+		case wire.MsgWake:
 			var w wire.Wake
 			_ = json.Unmarshal(env.Payload, &w)
 			go h.OnWake(ctx, w.Reason)
+		case wire.MsgEventsAck:
+			var a wire.EventsAck
+			if json.Unmarshal(env.Payload, &a) == nil && a.RunID != "" {
+				c.spool.Done(a.RunID, a.LastSeq)
+			}
 		}
 	}
 }

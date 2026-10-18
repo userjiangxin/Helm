@@ -112,12 +112,22 @@ export function buildApp(sql: Sql, hub: Hub, upgradeWebSocket: UpgradeWebSocket)
               await S.heartbeat(sql, machineId, hb.running_runs, hb);
             } else if (env.type === "run_events") {
               const b = P.RunEvents.parse(env.payload);
-              await S.ingestEvents(sql, machineId, b.run_id, b.events);
+              let lastSeq: number;
+              try {
+                lastSeq = (await S.ingestEventsAck(sql, machineId, b.run_id, b.events)).lastSeq;
+              } catch (err) {
+                // A run that is gone or held by another machine will never accept these events:
+                // ack them so the daemon stops resending, and log why.
+                if (err instanceof HttpError && (err.status === 404 || err.status === 409)) {
+                  console.warn("dropping events", b.run_id, err.message);
+                  lastSeq = Math.max(...b.events.map((e) => e.seq));
+                } else throw err;
+              }
+              ws.send(JSON.stringify(P.envelope("events_ack", { run_id: b.run_id, last_seq: lastSeq }, newId("msg"))));
             }
           } catch (err) {
             // Never drop the socket for one bad message; the daemon resends from its spool.
             console.warn("daemon ws message rejected", machineId, err instanceof Error ? err.message : err);
-            void ws;
           }
         },
       };

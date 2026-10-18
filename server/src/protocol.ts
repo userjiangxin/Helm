@@ -74,7 +74,9 @@ export const Heartbeat = z.strictObject({
   }),
 });
 
-export const MsgType = z.enum(["wake", "heartbeat", "run_events"]);
+export const EventsAck = z.strictObject({ run_id: z.string(), last_seq: z.number().int().nonnegative() });
+
+export const MsgType = z.enum(["wake", "heartbeat", "run_events", "events_ack"]);
 export const Envelope = z.strictObject({
   v: z.literal(1),
   type: MsgType,
