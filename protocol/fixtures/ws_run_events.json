@@ -1,0 +1,13 @@
+{
+  "v": 1, "type": "run_events", "id": "01JAX0000000000000000000E1", "ts": "2026-10-18T12:01:00Z",
+  "payload": {
+    "run_id": "run_01JAX0000000000000000000A1",
+    "events": [
+      { "seq": 1, "ts": "2026-10-18T12:00:20Z", "type": "state_change", "data": { "from": "PREPARING", "to": "RUNNING", "reason": "worktree ready" } },
+      { "seq": 2, "ts": "2026-10-18T12:00:31Z", "type": "tool_call", "data": { "tool": "Bash", "input_digest": "ossutil cp -r oss://.../2026-09 /data/ranker/2026-09", "decision": "allow" } },
+      { "seq": 3, "ts": "2026-10-18T12:00:58Z", "type": "fs_change", "data": { "path": "/data/ranker/prod/index.json", "added": 0, "removed": 0, "in_scope": false } },
+      { "seq": 4, "ts": "2026-10-18T12:00:59Z", "type": "error", "data": { "signature": "e3b0c442", "message": "KeyError: 'label'", "count": 3 } },
+      { "seq": 5, "ts": "2026-10-18T12:01:00Z", "type": "claim", "data": { "kind": "done", "text": "数据准备完成" } }
+    ]
+  }
+}

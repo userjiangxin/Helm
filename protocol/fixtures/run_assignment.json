@@ -1,0 +1,23 @@
+{
+  "run_id": "run_01JAX0000000000000000000A1",
+  "task_id": "task_01JAX0000000000000000000T1",
+  "epoch": 1,
+  "lease_until": "2026-10-18T12:30:00Z",
+  "executor": "codex",
+  "contract": {
+    "version": 3,
+    "intent": "用 9 月新增数据重训 ranker-v7",
+    "prompt": "按 skills/ranker-retrain 准备 2026-09 数据并做校验，不要启动训练。",
+    "repo": "git@example.com:algo/ranker.git",
+    "base_ref": "main",
+    "scope": {
+      "write_paths": ["/data/ranker/2026-09/**", "~/exp/ranker-v7/**"],
+      "deny_commands": ["git push", "rm -rf"],
+      "readonly_paths": ["/data/ranker/prod/**"]
+    },
+    "checkpoints": ["after:validate"],
+    "acceptance": ["样本数在 1.8M 到 2.2M 之间", "正负比在 0.08 到 0.15 之间"],
+    "budgets": { "tokens": 2000000, "wall_seconds": 14400 },
+    "skills": ["ranker-retrain"]
+  }
+}

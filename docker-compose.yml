@@ -1,0 +1,14 @@
+# Development stack. Production notes: docs/m0-tasks.md task S4.
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: helm
+      POSTGRES_PASSWORD: helm
+      POSTGRES_DB: helm
+    ports: ["127.0.0.1:5432:5432"]
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./db/migrations:/docker-entrypoint-initdb.d:ro   # first boot only; use `pnpm migrate` (S1) afterwards
+volumes:
+  pgdata:

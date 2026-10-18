@@ -1,0 +1,23 @@
+{
+  "id": "dir_01JAX0000000000000000000D1",
+  "run_id": "run_01JAX0000000000000000000A1",
+  "kind": "AMEND",
+  "contract_version": 4,
+  "args": {
+    "scope": {
+      "write_paths": [
+        "/data/ranker/2026-09/**",
+        "~/exp/ranker-v7/**"
+      ],
+      "deny_commands": [
+        "git push",
+        "rm -rf"
+      ],
+      "readonly_paths": [
+        "/data/ranker/**/prod/**"
+      ]
+    },
+    "message": "不要碰 prod 目录，样本标签字段叫 label_v2。"
+  },
+  "created_at": "2026-10-18T12:01:05Z"
+}

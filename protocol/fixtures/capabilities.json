@@ -1,0 +1,9 @@
+{
+  "machine_name": "gpu-03",
+  "daemon_version": "0.1.0",
+  "os": "linux", "arch": "amd64",
+  "labels": ["gpu"],
+  "agents": [ { "name": "codex", "path": "/usr/local/bin/codex", "version": "0.140.0" }, { "name": "claude", "path": "/usr/local/bin/claude", "version": "2.2.0" } ],
+  "gpus": [ { "index": 0, "name": "NVIDIA H800", "mem_total_mb": 81920 } ],
+  "max_concurrent_runs": 4
+}

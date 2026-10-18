@@ -1,0 +1,1 @@
+{ "v": 1, "type": "heartbeat", "id": "01JAX0000000000000000000H1", "ts": "2026-10-18T12:00:15Z", "payload": { "running_runs": ["run_01JAX0000000000000000000A1"], "load": { "cpu_pct": 23.5, "gpus": [{ "index": 0, "util_pct": 87, "mem_used_mb": 30210, "mem_total_mb": 81920 }] } } }
