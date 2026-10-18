@@ -14,7 +14,9 @@ const RULES: [RegExp, (m: RegExpMatchArray) => string][] = [
   [/^agent process exited: (.+)$/, (m) => `agent 进程退出：${m[1]}`],
   [/^agent process exited unexpectedly$/, () => "agent 进程意外退出"],
   [/^executor not available on this machine: (.+)$/, (m) => `这台机器没有执行器 ${m[1]}`],
-  [/^(CONTINUE|STEER|PAUSE|ABORT|AMEND)$/, (m) => ({ CONTINUE: "你放行了", STEER: "你发送了引导", PAUSE: "你暂停了", ABORT: "你终止了", AMEND: "你修改了范围" })[m[1]!]!],
+  [/^(CONTINUE|STEER|PAUSE|ABORT|AMEND|ROLLBACK)$/, (m) => ({ CONTINUE: "你放行了", STEER: "你发送了引导", PAUSE: "你暂停了", ABORT: "你终止了", AMEND: "你修改了 Contract", ROLLBACK: "你要求回滚" })[m[1]!]!],
+  [/^restarted after ROLLBACK$/, () => "已回滚，agent 重新开始"],
+  [/^workspace: (.+)$/, (m) => `准备工作目录失败：${m[1]}`],
 ];
 
 export function reasonText(r: string | null | undefined): string {

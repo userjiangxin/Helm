@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"sync"
 	"time"
 
@@ -38,6 +40,7 @@ type run struct {
 
 	ws      workspace.Workspace
 	attempt int
+	rawLog  *os.File
 }
 
 type Supervisor struct {
@@ -51,6 +54,8 @@ type Supervisor struct {
 		Sample(context.Context) wire.Load
 	}
 	wsm *workspace.Manager
+
+	evidenceDir, machine string
 
 	wakeMu sync.Mutex // serializes OnWake so claims never race
 
@@ -68,6 +73,9 @@ type Options struct {
 		Sample(context.Context) wire.Load
 	} // optional heartbeat load sampler
 	Workspaces *workspace.Manager // nil: use contract.workdir as is (tests)
+	// EvidenceDir stores raw agent output per run (L0); empty disables it.
+	EvidenceDir string
+	MachineName string // used in ev:// URIs
 }
 
 func New(ctl Control, o Options) *Supervisor {
@@ -75,7 +83,7 @@ func New(ctl Control, o Options) *Supervisor {
 		o.Log = slog.Default()
 	}
 	s := &Supervisor{ctl: ctl, executors: map[string]executor.Executor{}, maxRuns: o.MaxRuns,
-		hookSock: o.HookSock, log: o.Log, load: o.Load, wsm: o.Workspaces, runs: map[string]*run{}}
+		hookSock: o.HookSock, log: o.Log, load: o.Load, wsm: o.Workspaces, evidenceDir: o.EvidenceDir, machine: o.MachineName, runs: map[string]*run{}}
 	for _, e := range o.Executors {
 		s.executors[e.Name()] = e
 		if ch := e.Events(); ch != nil {
@@ -236,6 +244,23 @@ func (s *Supervisor) launch(ctx context.Context, r *run, c wire.Contract) error 
 	spec := executor.RunSpec{RunID: runID, Attempt: r.attempt, Workdir: r.ws.Dir, Contract: c, HookSock: s.hookSock,
 		Decide: func(req policy.Request) policy.Decision { return s.Decide(runID, req) }}
 	s.mu.Unlock()
+	if s.evidenceDir != "" {
+		name := fmt.Sprintf("transcript-%d.jsonl", spec.Attempt)
+		dir := filepath.Join(s.evidenceDir, runID)
+		if err := os.MkdirAll(dir, 0o700); err == nil {
+			if f, err := os.OpenFile(filepath.Join(dir, name), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600); err == nil {
+				s.mu.Lock()
+				if r.rawLog != nil {
+					_ = r.rawLog.Close()
+				}
+				r.rawLog = f
+				s.mu.Unlock()
+				spec.RawLog = f
+				s.emit(ctx, r, wire.EvEvidence, wire.Evidence{
+					URI: fmt.Sprintf("ev://%s/%s/%s", s.machine, runID, name), Kind: "transcript"})
+			}
+		}
+	}
 	sess, err := r.exec.Start(ctx, spec)
 	if err != nil {
 		return err
@@ -252,6 +277,9 @@ func (s *Supervisor) launch(ctx context.Context, r *run, c wire.Contract) error 
 
 func (s *Supervisor) forget(runID string) {
 	s.mu.Lock()
+	if r, ok := s.runs[runID]; ok && r.rawLog != nil {
+		_ = r.rawLog.Close()
+	}
 	delete(s.runs, runID)
 	s.mu.Unlock()
 }

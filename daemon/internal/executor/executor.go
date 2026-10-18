@@ -6,6 +6,7 @@ package executor
 import (
 	"context"
 	"fmt"
+	"io"
 	"strings"
 	"time"
 
@@ -26,7 +27,9 @@ type RunSpec struct {
 	Decide    func(policy.Request) policy.Decision
 	SkillDirs []string // skill folders to expose to the agent for this run only
 	ResumeRef string   // agent-native session id to resume (ROLLBACK starts fresh instead)
-	Env       []string
+	// RawLog receives every raw line the agent process emits (L0 evidence). May be nil.
+	RawLog io.Writer
+	Env    []string
 }
 
 // Event is a normalized L1 event before the supervisor assigns it a seq.
@@ -71,4 +74,10 @@ func RunOf(s SessionID) string {
 		return string(s)[:i]
 	}
 	return string(s)
+}
+
+func writeRaw(w io.Writer, line []byte) {
+	if w != nil {
+		_, _ = w.Write(append(append([]byte(nil), line...), '\n'))
+	}
 }

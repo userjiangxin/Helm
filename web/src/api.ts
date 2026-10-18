@@ -13,7 +13,7 @@ export interface BoardTask {
   run_id: string | null; run_state: RunState | null; machine_id: string | null; state_reason: string | null;
 }
 export interface Contract {
-  version: number; intent: string; prompt: string; workdir?: string; repo?: string;
+  version: number; intent: string; prompt: string; workdir?: string; repo?: string; base_ref?: string;
   scope: { write_paths: string[]; readonly_paths?: string[]; deny_commands?: string[] };
   acceptance?: string[]; budgets: Record<string, number>; skills?: string[];
 }
@@ -63,6 +63,8 @@ export const api = {
   }) => call<{ id: string }>("POST", `/goals/${goalId}/tasks`, body),
   task: (id: string) => call<TaskDetail>("GET", `/tasks/${id}`),
   patchTask: (id: string, body: Partial<Pick<BoardTask, "status" | "position" | "title">>) => call<void>("PATCH", `/tasks/${id}`, body),
+  reviseContract: (taskId: string, contract: Partial<Omit<Contract, "version">>, reason: string) =>
+    call<{ version: number }>("POST", `/tasks/${taskId}/contracts`, { contract, reason }),
   dispatch: (taskId: string) => call<{ run_id: string }>("POST", `/tasks/${taskId}/dispatch`),
   events: (runId: string) => call<RunEvent[]>("GET", `/runs/${runId}/events`),
   directive: (runId: string, kind: DirectiveKind, args?: Record<string, unknown>) =>

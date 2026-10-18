@@ -52,3 +52,14 @@ it("reject → CONTINUE telling the agent not to retry; contract unchanged", asy
   expect(String(d!.args!.message)).toMatch(/NOT approved/);
   expect(await sql.query(`SELECT version FROM contract WHERE task_id = $1`, [tid])).toHaveLength(1);
 });
+
+it("revising the contract of a running task bumps the version and sends AMEND with what changed", async () => {
+  const { sql, machineId, runId, tid } = await gatedRun();
+  const r = await S.reviseContract(sql, tid, { prompt: "use label_v2", scope: { write_paths: ["/data/a/**", "/data/b/**"] } }, "字段改名");
+  expect(r.version).toBe(2);
+  const [d] = await S.pendingDirectives(sql, machineId, "");
+  expect(d).toMatchObject({ run_id: runId, kind: "AMEND", contract_version: 2, args: { scope: { write_paths: ["/data/a/**", "/data/b/**"] } } });
+  expect(String(d!.args!.message)).toContain("use label_v2");
+  const [t] = await sql.query<{ current_contract_version: number }>(`SELECT current_contract_version FROM task WHERE id = $1`, [tid]);
+  expect(t!.current_contract_version).toBe(2);
+});

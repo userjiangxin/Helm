@@ -184,7 +184,7 @@ function NewTaskDialog({ goalId, open, onClose }: { goalId: string; open: boolea
   const ref = useDialog(open);
   const qc = useQueryClient();
   const navigate = useNavigate();
-  const [f, setF] = useState({ title: "", executor: "claude" as Executor, labels: "", workdir: "", prompt: "", write: "", readonly: "", acceptance: "" });
+  const [f, setF] = useState({ title: "", executor: "claude" as Executor, labels: "", workdir: "", repo: "", baseRef: "", prompt: "", write: "", readonly: "", acceptance: "" });
   const set = (k: keyof typeof f) => (e: { target: { value: string } }) => setF({ ...f, [k]: e.target.value });
 
   const create = useMutation({
@@ -197,6 +197,8 @@ function NewTaskDialog({ goalId, open, onClose }: { goalId: string; open: boolea
           intent: f.title.trim(),
           prompt: f.prompt.trim(),
           workdir: f.workdir.trim() || undefined,
+          repo: f.repo.trim() || undefined,
+          base_ref: f.repo.trim() ? f.baseRef.trim() || undefined : undefined,
           scope: { write_paths: lines(f.write), readonly_paths: lines(f.readonly) },
           acceptance: lines(f.acceptance),
           budgets: {},
@@ -228,9 +230,19 @@ function NewTaskDialog({ goalId, open, onClose }: { goalId: string; open: boolea
               <input className="input" value={f.labels} onChange={set("labels")} placeholder="gpu" />
             </label>
           </div>
-          <label className="field"><span>工作目录（在目标机器上）</span>
-            <input className="input" required value={f.workdir} onChange={set("workdir")} placeholder="/home/you/projects/ranker" />
-          </label>
+          <div className="row">
+            <label className="field"><span>工作目录（在目标机器上）</span>
+              <input className="input" required={!f.repo.trim()} value={f.workdir} onChange={set("workdir")} placeholder="/home/you/projects/ranker" />
+            </label>
+            <label className="field"><span>或者：Git 仓库（每次执行用独立副本，可回滚）</span>
+              <input className="input" value={f.repo} onChange={set("repo")} placeholder="git@github.com:you/ranker.git" />
+            </label>
+          </div>
+          {f.repo.trim() && (
+            <label className="field"><span>分支或提交（默认 HEAD）</span>
+              <input className="input" value={f.baseRef} onChange={set("baseRef")} placeholder="main" />
+            </label>
+          )}
           <label className="field"><span>具体要求</span>
             <textarea className="textarea" required value={f.prompt} onChange={set("prompt")} placeholder="下载 oss://… 下 2026-09 的分区，按 schema v3 校验，不要启动训练。" />
           </label>

@@ -73,7 +73,8 @@ it.skipIf(!hasGo)("helmd registers, heartbeats, wakes on dispatch, claims and re
   expect(Date.now() - t0).toBeLessThan(5_000); // woken by push, not by the 30s poll
 
   const events = await sql.query<{ type: string; data: { to: string } }>(`SELECT type, data FROM run_event WHERE run_id=$1 ORDER BY seq`, [runId]);
-  expect(events.map((e) => e.data.to)).toEqual(["PREPARING", "FAILED"]);
+  expect(events.filter((e) => e.type === "state_change").map((e) => e.data.to)).toEqual(["PREPARING", "FAILED"]);
+  expect(events.some((e) => e.type === "evidence")).toBe(true); // raw transcript location reported
 
   // 3. events_ack: once persisted, the daemon's on-disk spool is emptied.
   await waitFor(async () => readdirSync(join(tmp, "home", "spool")).length === 0);

@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
@@ -279,5 +281,28 @@ func TestRollbackIgnoresOldSessionExit(t *testing.T) {
 		if e.Type == wire.EvStateChange && strings.Contains(string(e.Data), "exited unexpectedly") {
 			t.Fatalf("old session exit was treated as current: %s", e.Data)
 		}
+	}
+}
+
+func TestEvidenceTranscriptIsCreatedAndReported(t *testing.T) {
+	dir := t.TempDir()
+	ctl := &fakeCtl{queue: []wire.RunAssignment{assignment("r1", 1)}}
+	s := New(ctl, Options{Executors: []executor.Executor{&fakeExec{}}, MaxRuns: 1, EvidenceDir: dir, MachineName: "mch_x"})
+	s.OnWake(context.Background(), "test")
+	var uri string
+	ctl.mu.Lock()
+	for _, e := range ctl.events {
+		if e.Type == wire.EvEvidence {
+			var ev wire.Evidence
+			_ = json.Unmarshal(e.Data, &ev)
+			uri = ev.URI
+		}
+	}
+	ctl.mu.Unlock()
+	if uri != "ev://mch_x/r1/transcript-1.jsonl" {
+		t.Fatalf("evidence uri %q", uri)
+	}
+	if _, err := os.Stat(filepath.Join(dir, "r1", "transcript-1.jsonl")); err != nil {
+		t.Fatal(err)
 	}
 }

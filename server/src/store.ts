@@ -289,6 +289,45 @@ export async function decideApproval(sql: Sql, approvalId: string, d: ApprovalDe
   });
 }
 
+// ---------- contracts edited by the human ----------
+
+/**
+ * Writes a new contract version. If the task has a run on a machine, the run moves to the new
+ * version and gets an AMEND (full scope + a message describing what changed).
+ */
+export async function reviseContract(
+  sql: Sql, taskId: string, patch: Partial<Omit<Contract, "version">>, reason: string, by: "human" | "brain" = "human",
+): Promise<{ version: number; directiveId?: string }> {
+  return sql.tx(async (tx) => {
+    const [cur] = await tx.query<{ version: number; body: Contract }>(
+      `SELECT c.version, c.body FROM task t JOIN contract c ON c.task_id = t.id AND c.version = t.current_contract_version
+        WHERE t.id = $1 FOR UPDATE OF t`, [taskId]);
+    if (!cur) throw new HttpError(404, "task or contract not found");
+    const [max] = await tx.query<{ v: number }>(`SELECT max(version) AS v FROM contract WHERE task_id = $1`, [taskId]);
+    const version = Number(max!.v) + 1;
+    const body: Contract = { ...cur.body, ...patch, scope: { ...cur.body.scope, ...(patch.scope ?? {}) }, version };
+    await tx.query(`INSERT INTO contract (task_id, version, body, author, reason) VALUES ($1, $2, $3, $4, $5)`,
+      [taskId, version, JSON.stringify(body), by, reason]);
+    await tx.query(`UPDATE task SET current_contract_version = $2, updated_at = now() WHERE id = $1`, [taskId, version]);
+
+    const [run] = await tx.query<{ id: string }>(
+      `SELECT id FROM run WHERE task_id = $1 AND machine_id IS NOT NULL
+          AND state IN ('PREPARING','RUNNING','GATED','SUSPENDED','VERIFYING') ORDER BY created_at DESC LIMIT 1`, [taskId]);
+    if (!run) return { version };
+    await tx.query(`UPDATE run SET contract_version = $2 WHERE id = $1`, [run.id, version]);
+    const changes: string[] = [];
+    if (patch.prompt !== undefined && patch.prompt !== cur.body.prompt) changes.push(`New instructions:\n${patch.prompt}`);
+    if (patch.acceptance !== undefined) changes.push(`Acceptance criteria now:\n${(patch.acceptance ?? []).map((a) => `- ${a}`).join("\n")}`);
+    if (patch.scope !== undefined) {
+      changes.push(`Writable paths now: ${body.scope.write_paths.join(", ") || "(working directory only)"}` +
+        (body.scope.readonly_paths?.length ? `; read-only: ${body.scope.readonly_paths.join(", ")}` : ""));
+    }
+    const message = `Helm: the task contract was updated to version ${version}` + (reason ? ` (${reason})` : "") + ".\n" + changes.join("\n\n");
+    const directiveId = await issueDirective(tx, { runId: run.id, kind: "AMEND", args: { scope: body.scope, message }, issuedBy: by });
+    return { version, directiveId };
+  });
+}
+
 // ---------- directives ----------
 
 export async function issueDirective(

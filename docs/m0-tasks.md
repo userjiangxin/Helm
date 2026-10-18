@@ -29,7 +29,7 @@
 | ~~D4~~ ⚠️ | Codex 执行器：`codex app-server`（stdio JSON-RPC）。先用 `generate-json-schema` 导出协议类型；实现 initialize、thread/start、turn/start、通知归一化、审批请求接入策略引擎、turn/interrupt、thread/resume | 一个真实的 Codex Run 能跑完；越界写入被拦截并让 Run 进入 GATED；STEER 能在下一轮生效 | **Opus** |
 | ~~D5~~ ✅ | Claude 执行器：`claude -p` 的 stream-json 输入输出模式，按 Run 生成 settings 文件注册 `helmd hook pre-tool-use`；实现消息注入、中断、`--resume`；动手前先核对已安装版本的 `claude --help` | 一个真实的 Claude Code Run 能跑完；hook 拦截生效；PAUSE 后下一次工具调用被拒绝 | **Opus** |
 | ~~D6~~ ✅ | 心跳负载采样：CPU（读 /proc 或 gopsutil）、`nvidia-smi` 的利用率与显存 | 看板“机器”页能看到每张卡的占用 | Sonnet |
-| D7 | 事件归一化工具：报错签名（去掉数字、路径、地址后哈希，按签名计数）、L0 证据落盘（`~/.helm/evidence/<run>/`）并上报 `evidence` 事件 | 同一报错重复出现只产生一个签名且 count 递增 | Sonnet |
+| ~~D7~~ ✅ | 事件归一化工具：报错签名（去掉数字、路径、地址后哈希，按签名计数）、L0 证据落盘（`~/.helm/evidence/<run>/`）并上报 `evidence` 事件 | 同一报错重复出现只产生一个签名且 count 递增 | Sonnet |
 
 ### 控制面（server）
 
@@ -37,7 +37,7 @@
 | --- | --- | --- | --- |
 | ~~S1~~ ✅ | 迁移执行器：`pnpm migrate` 按文件名顺序执行 `db/migrations`，用 `schema_migrations` 表记录 | 重复执行无副作用 | Sonnet |
 | ~~S2~~ ✅ | hold → 审批：收到 `decision=hold` 的 tool_call 事件时创建 approval（附工具调用上下文）；批准接口生成 CONTINUE（或带新 scope 的 AMEND + 新 contract 版本），拒绝接口生成 STEER 或 ABORT | 测试覆盖“越界 → 审批 → 批准 → 新 contract 版本 → AMEND 下发”全链路 | **Opus** |
-| S3 | 看板 API 补全：任务拖拽（status、position）、按任务列出 Run 历史、人工创建新 contract 版本 | 接口都有 PGlite 测试 | Sonnet |
+| ~~S3~~ ✅ | 看板 API 补全：任务拖拽（status、position）、按任务列出 Run 历史、人工创建新 contract 版本 | 接口都有 PGlite 测试 | Sonnet |
 | ~~S4~~ ✅ | 部署：`docker-compose.yml`（Postgres 17 + pgvector、server、web），以及 `tailscale serve` 的配置说明 | 新机器按文档 15 分钟内跑起来 | Sonnet |
 | ~~S5~~ ✅ | 看板鉴权：信任 `tailscale serve` 注入的身份头，只允许你的 Tailscale 账号；直连时退回单用户口令 | 未经 Tailscale 的请求拿不到 `/api/*` | Sonnet |
 
@@ -81,6 +81,8 @@ HELM_LIVE_CODEX=1 go test ./internal/executor -run TestCodexLive -v     # 一轮
 - AMEND 带说明时会解除闸门（GATED → RUNNING），让 agent 开始新的一轮
 - 新增 `COMPLETE` 指令：人工验收通过后结束 Run（迁移 0002）
 - 零安装模式：`DATABASE_URL=pglite:<目录>`，以及 `make demo`
+- ROLLBACK 指令与看板“回滚重做”按钮（需要任务使用 Git 仓库）
+- 看板上修改 Contract：生成新版本，如果任务正在执行，用 AMEND 立即下发
 
 ## 推荐顺序
 

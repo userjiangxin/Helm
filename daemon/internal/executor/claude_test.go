@@ -76,7 +76,8 @@ func TestClaudeProcessPlumbing(t *testing.T) {
 	args := filepath.Join(dir, "args")
 	c := NewClaude(bin, "/usr/local/bin/helmd", filepath.Join(dir, "state"))
 	ctx := context.Background()
-	sid, err := c.Start(ctx, RunSpec{RunID: "run_1", Workdir: dir, HookSock: "/tmp/h.sock",
+	raw := &tailBuffer{max: 1 << 20}
+	sid, err := c.Start(ctx, RunSpec{RunID: "run_1", Workdir: dir, HookSock: "/tmp/h.sock", RawLog: raw,
 		Contract: wire.Contract{Intent: "i", Prompt: "p"}, Env: []string{"FAKE_ARGS=" + args}})
 	if err != nil {
 		t.Fatal(err)
@@ -113,6 +114,9 @@ func TestClaudeProcessPlumbing(t *testing.T) {
 	for e := next(); !e.Done; e = next() {
 	}
 
+	if n := strings.Count(raw.String(), "\n"); n < 5 { // init + 2×(assistant, result)
+		t.Fatalf("raw log should hold every stdout line, got %d:\n%s", n, raw.String())
+	}
 	argv, _ := os.ReadFile(args)
 	for _, want := range []string{"--input-format stream-json", "--output-format stream-json", "--session-id", "--settings", "--permission-mode bypassPermissions"} {
 		if !strings.Contains(string(argv), want) {

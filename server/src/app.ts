@@ -219,6 +219,14 @@ export function buildApp(sql: Sql, hub: Hub, upgradeWebSocket: UpgradeWebSocket)
          FROM run r JOIN task t ON t.id = r.task_id LEFT JOIN machine m ON m.id = r.machine_id
         WHERE r.state IN ('GATED','VERIFYING','ORPHANED') ORDER BY r.created_at`)));
 
+  api.post("/tasks/:id/contracts", async (c) => {
+    const b = z.object({
+      reason: z.string().default(""),
+      contract: P.Contract.omit({ version: true }).partial(),
+    }).parse(await c.req.json());
+    return c.json(await S.reviseContract(sql, c.req.param("id"), b.contract, b.reason), 201);
+  });
+
   api.post("/tasks/:id/dispatch", async (c) => c.json({ run_id: await S.dispatchRun(sql, c.req.param("id")) }, 201));
 
   api.get("/runs/:id/events", async (c) =>

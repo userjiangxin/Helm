@@ -112,12 +112,14 @@ func cmdRun(args []string) {
 	}
 	client := conn.New(conn.Options{ServerURL: *server, Token: token, Log: log}, spool)
 	sup := supervisor.New(client, supervisor.Options{
-		Executors:  []executor.Executor{executor.NewCodex(lookPath("codex")), executor.NewClaude(lookPath("claude"), selfPath(), filepath.Join(helmHome(), "run"))},
-		MaxRuns:    *maxRuns,
-		HookSock:   defaultSock(),
-		Log:        log,
-		Load:       registry.NewLoadSampler(),
-		Workspaces: workspace.New(helmHome()),
+		Executors:   []executor.Executor{executor.NewCodex(lookPath("codex")), executor.NewClaude(lookPath("claude"), selfPath(), filepath.Join(helmHome(), "run"))},
+		MaxRuns:     *maxRuns,
+		HookSock:    defaultSock(),
+		Log:         log,
+		Load:        registry.NewLoadSampler(),
+		Workspaces:  workspace.New(helmHome()),
+		EvidenceDir: filepath.Join(helmHome(), "evidence"),
+		MachineName: machineName(),
 	})
 
 	hs, err := hook.Listen(defaultSock(), sup)
@@ -132,6 +134,14 @@ func cmdRun(args []string) {
 	}
 	log.Info("helmd started", "version", version, "server", *server)
 	client.Run(ctx, sup)
+}
+
+func machineName() string {
+	if c, err := creds.Load(helmHome()); err == nil && c.MachineID != "" {
+		return c.MachineID
+	}
+	h, _ := os.Hostname()
+	return h
 }
 
 func lookPath(name string) string {

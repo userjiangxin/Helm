@@ -126,7 +126,7 @@ func (c *Claude) Start(ctx context.Context, spec RunSpec) (SessionID, error) {
 	c.procs[sid] = p
 	c.mu.Unlock()
 
-	go c.read(sid, stdout)
+	go c.read(sid, stdout, spec.RawLog)
 	go func() {
 		err := cmd.Wait()
 		if err != nil && stderr.String() != "" {
@@ -236,10 +236,11 @@ type ccBlock struct {
 	Content json.RawMessage `json:"content"`
 }
 
-func (c *Claude) read(sid SessionID, r io.Reader) {
+func (c *Claude) read(sid SessionID, r io.Reader, raw io.Writer) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1<<20), 16<<20)
 	for sc.Scan() {
+		writeRaw(raw, sc.Bytes())
 		for _, ev := range NormalizeClaudeLine(sc.Bytes()) {
 			c.events <- SessionEvent{Session: sid, Event: ev}
 		}

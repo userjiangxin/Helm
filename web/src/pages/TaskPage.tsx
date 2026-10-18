@@ -54,8 +54,8 @@ export function TaskPage() {
 
       <section className="right" aria-label="控制">
         {run?.state === "GATED" && <ApprovalCard runId={run.id} />}
-        <Controls taskId={task.id} run={run} canDispatch={!runs.some((r) => ACTIVE.includes(r.state)) && !!contract} />
-        {contract && <ContractView v={contract.version} c={contract.body} />}
+        <Controls taskId={task.id} run={run} canRollback={!!contract?.body.repo} canDispatch={!runs.some((r) => ACTIVE.includes(r.state)) && !!contract} />
+        {contract && <ContractView taskId={task.id} v={contract.version} c={contract.body} />}
       </section>
     </div>
   );
@@ -109,6 +109,12 @@ function EventRow({ e }: { e: RunEvent }) {
     }
     case "error":
       return <li className="ev error">{t}<div className="ev-body">{String(d.message)}{Number(d.count) > 1 ? `（第 ${d.count} 次）` : ""}</div></li>;
+    case "evidence":
+      return <li className="ev state-change">{t}<div className="ev-body">完整原始记录保存在执行机器上：<code>{String(d.uri)}</code></div></li>;
+    case "cmd_exit":
+      return <li className={`ev tool ${Number(d.exit_code) === 0 ? "" : "deny"}`}>{t}<div className="ev-body"><span className="decision">退出码 {String(d.exit_code)}</span><code>{String(d.cmd_digest)}</code></div></li>;
+    case "fs_change":
+      return <li className="ev tool">{t}<div className="ev-body"><span className="decision">改动文件</span><code>{String(d.path)}</code> +{String(d.added)} −{String(d.removed)}</div></li>;
     case "claim":
       return <li className="ev claim">{t}<div className="ev-body"><div className="hint">agent 自述{d.kind === "done" ? "已完成，需要验收" : "本轮异常结束"}</div>{String(d.text)}</div></li>;
     default:
@@ -116,7 +122,7 @@ function EventRow({ e }: { e: RunEvent }) {
   }
 }
 
-function Controls({ taskId, run, canDispatch }: { taskId: string; run?: Run; canDispatch: boolean }) {
+function Controls({ taskId, run, canDispatch, canRollback }: { taskId: string; run?: Run; canDispatch: boolean; canRollback: boolean }) {
   const qc = useQueryClient();
   const [note, setNote] = useState("");
   const send = useMutation({
@@ -151,6 +157,12 @@ function Controls({ taskId, run, canDispatch }: { taskId: string; run?: Run; can
             {s === "VERIFYING" && <button className="btn" onClick={go("STEER", true)} disabled={!note.trim()}>打回修改</button>}
             {(s === "RUNNING" || s === "GATED") && <button className="btn" onClick={go("STEER", true)} disabled={!note.trim()}>发送引导</button>}
             {(s === "RUNNING" || s === "PREPARING") && <button className="btn" onClick={go("PAUSE")}>暂停</button>}
+            {canRollback && s !== "PREPARING" && (
+              <button className="btn" title="丢弃这次执行的所有改动，按你的说明重新开始"
+                onClick={() => confirm("回滚会丢弃这次执行在仓库副本里的所有改动，然后让 agent 重新开始。确定吗？") && send.mutate({ kind: "ROLLBACK", message: note.trim() || undefined })}>
+                回滚重做
+              </button>
+            )}
             <button className="btn danger" onClick={() => confirm("终止后 agent 会立即停止，确定吗？") && send.mutate({ kind: "ABORT" })}>终止</button>
           </div>
         </>
@@ -162,12 +174,47 @@ function Controls({ taskId, run, canDispatch }: { taskId: string; run?: Run; can
   );
 }
 
-function ContractView({ v, c }: { v: number; c: import("../api").Contract }) {
+function ContractView({ taskId, v, c }: { taskId: string; v: number; c: import("../api").Contract }) {
+  const qc = useQueryClient();
+  const [editing, setEditing] = useState(false);
+  const join = (xs?: string[]) => (xs ?? []).join("\n");
+  const lines = (s: string) => s.split("\n").map((l) => l.trim()).filter(Boolean);
+  const [f, setF] = useState({ prompt: c.prompt, write: join(c.scope.write_paths), readonly: join(c.scope.readonly_paths), acceptance: join(c.acceptance), reason: "" });
+  const save = useMutation({
+    mutationFn: () => api.reviseContract(taskId, {
+      prompt: f.prompt,
+      acceptance: lines(f.acceptance),
+      scope: { write_paths: lines(f.write), readonly_paths: lines(f.readonly) },
+    }, f.reason.trim()),
+    onSuccess: () => { setEditing(false); void qc.invalidateQueries(); },
+  });
+
+  if (editing) {
+    return (
+      <form className="contract" onSubmit={(e) => { e.preventDefault(); save.mutate(); }}>
+        <h2>修改 Contract（保存为第 {v + 1} 版）</h2>
+        <p className="hint">如果任务正在执行，新版本会立刻下发给 agent。</p>
+        <label className="field"><span>要求</span><textarea className="textarea" value={f.prompt} onChange={(e) => setF({ ...f, prompt: e.target.value })} /></label>
+        <label className="field"><span>额外可写路径（每行一个）</span><textarea className="textarea" value={f.write} onChange={(e) => setF({ ...f, write: e.target.value })} /></label>
+        <label className="field"><span>只读路径（每行一个）</span><textarea className="textarea" value={f.readonly} onChange={(e) => setF({ ...f, readonly: e.target.value })} /></label>
+        <label className="field"><span>验收标准（每行一条）</span><textarea className="textarea" value={f.acceptance} onChange={(e) => setF({ ...f, acceptance: e.target.value })} /></label>
+        <label className="field"><span>为什么改（会告诉 agent）</span><input className="input" value={f.reason} onChange={(e) => setF({ ...f, reason: e.target.value })} /></label>
+        {save.error && <p className="error">{save.error.message}</p>}
+        <div className="btns" style={{ display: "flex", gap: 6 }}>
+          <button className="btn primary" disabled={save.isPending}>保存第 {v + 1} 版</button>
+          <button type="button" className="btn" onClick={() => setEditing(false)}>取消</button>
+        </div>
+      </form>
+    );
+  }
   return (
     <div className="contract">
-      <h2>Contract 第 {v} 版</h2>
+      <h2 style={{ display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+        Contract 第 {v} 版 <button className="btn" onClick={() => setEditing(true)}>修改</button>
+      </h2>
       <dl>
         <div><dt>要求</dt><dd className="prompt">{c.prompt}</dd></div>
+        {c.repo && <div><dt>仓库</dt><dd>{c.repo}{c.base_ref ? ` @ ${c.base_ref}` : ""}</dd></div>}
         {c.workdir && <div><dt>工作目录</dt><dd>{c.workdir}</dd></div>}
         {c.scope.write_paths.length > 0 && <div><dt>额外可写</dt><dd><ul>{c.scope.write_paths.map((p) => <li key={p}>{p}</li>)}</ul></dd></div>}
         {!!c.scope.readonly_paths?.length && <div><dt>只读</dt><dd><ul>{c.scope.readonly_paths.map((p) => <li key={p}>{p}</li>)}</ul></dd></div>}
@@ -176,7 +223,6 @@ function ContractView({ v, c }: { v: number; c: import("../api").Contract }) {
     </div>
   );
 }
-
 function ApprovalCard({ runId }: { runId: string }) {
   const qc = useQueryClient();
   const [note, setNote] = useState("");

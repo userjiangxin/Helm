@@ -140,7 +140,7 @@ func (c *Codex) Start(ctx context.Context, spec RunSpec) (SessionID, error) {
 	c.procs[sid] = p
 	c.mu.Unlock()
 
-	go c.read(sid, p, stdout)
+	go c.read(sid, p, stdout, spec.RawLog)
 	go func() {
 		err := cmd.Wait()
 		if err != nil && stderr.String() != "" {
@@ -359,10 +359,11 @@ type rpcMsg struct {
 	} `json:"error"`
 }
 
-func (c *Codex) read(sid SessionID, p *codexProc, r io.Reader) {
+func (c *Codex) read(sid SessionID, p *codexProc, r io.Reader, raw io.Writer) {
 	sc := bufio.NewScanner(r)
 	sc.Buffer(make([]byte, 0, 1<<20), 32<<20)
 	for sc.Scan() {
+		writeRaw(raw, sc.Bytes())
 		var m rpcMsg
 		if json.Unmarshal(sc.Bytes(), &m) != nil {
 			continue
